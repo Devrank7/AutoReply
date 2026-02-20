@@ -6,6 +6,7 @@ Usage: python app.py
 Hotkeys:
   Ctrl+Alt+R (Win) / Cmd+Option+R (Mac) — Quick: extract text + generate reply
   Ctrl+Alt+E (Win) / Cmd+Option+E (Mac) — Deep: scroll for history + generate reply
+  Ctrl+Shift+E (Win) / Cmd+Shift+E (Mac) — Client Lookup: browse demo clients
 
 How it works:
   1. Reads ALL text from the active chat window via OS Accessibility API
@@ -31,6 +32,7 @@ from PIL import Image, ImageDraw
 from platform_utils import get_platform, MODIFIER_KEY, PASTE_HOTKEY, IS_MACOS
 from services.ai_agent import AIAgent
 from overlay import OverlayWindow
+from client_lookup_window import ClientLookupWindow
 from config import SCREENSHOT_PATH
 
 logging.basicConfig(
@@ -54,6 +56,11 @@ _DEEP_HOTKEY = f"{_MOD}+{_ALT}+e"
 _HOTKEY_LABEL_QUICK = "Cmd+Option+R" if IS_MACOS else "Ctrl+Alt+R"
 _HOTKEY_LABEL_DEEP = "Cmd+Option+E" if IS_MACOS else "Ctrl+Alt+E"
 
+# Client Lookup hotkey (uses Shift, not Alt — no browser conflicts)
+_SHIFT = "<shift>"
+_CLIENT_HOTKEY = f"{_MOD}+{_SHIFT}+e"
+_HOTKEY_LABEL_CLIENT = "Cmd+Shift+E" if IS_MACOS else "Ctrl+Shift+E"
+
 
 def _create_tray_icon_image() -> Image.Image:
     """Create a simple tray icon (blue circle with 'AR' text)."""
@@ -72,9 +79,10 @@ def _create_tray_icon_image() -> Image.Image:
 class Hotkey:
     """Global hotkey listener using pynput (cross-platform)."""
 
-    def __init__(self, on_quick, on_deep):
+    def __init__(self, on_quick, on_deep, on_client):
         self.on_quick = on_quick
         self.on_deep = on_deep
+        self.on_client = on_client
         self._listener = None
 
     def start(self):
@@ -88,23 +96,29 @@ class Hotkey:
             keyboard.HotKey.parse(_DEEP_HOTKEY),
             lambda: self.on_deep(),
         )
+        hotkey_client = keyboard.HotKey(
+            keyboard.HotKey.parse(_CLIENT_HOTKEY),
+            lambda: self.on_client(),
+        )
 
         def on_press(key):
             canonical = self._listener.canonical(key)
             hotkey_quick.press(canonical)
             hotkey_deep.press(canonical)
+            hotkey_client.press(canonical)
 
         def on_release(key):
             canonical = self._listener.canonical(key)
             hotkey_quick.release(canonical)
             hotkey_deep.release(canonical)
+            hotkey_client.release(canonical)
 
         self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.daemon = True
         self._listener.start()
         logger.info(
-            "Hotkeys active: %s (quick) | %s (deep scan)",
-            _HOTKEY_LABEL_QUICK, _HOTKEY_LABEL_DEEP,
+            "Hotkeys active: %s (quick) | %s (deep) | %s (clients)",
+            _HOTKEY_LABEL_QUICK, _HOTKEY_LABEL_DEEP, _HOTKEY_LABEL_CLIENT,
         )
 
     def stop(self):
@@ -125,11 +139,13 @@ class AutoReplyApp:
         self._last_screenshot = None
         self._last_suggestion = None
         self._busy = False
+        self._client_window = None
 
         # Global hotkeys
         self.hotkey = Hotkey(
             on_quick=lambda: self._on_hotkey(deep=False),
             on_deep=lambda: self._on_hotkey(deep=True),
+            on_client=lambda: self._on_client_lookup(),
         )
         self.hotkey.start()
 
@@ -150,6 +166,10 @@ class AutoReplyApp:
                     f"Deep Scan ({_HOTKEY_LABEL_DEEP})",
                     lambda: self._on_hotkey(deep=True),
                 ),
+                pystray.MenuItem(
+                    f"Client Lookup ({_HOTKEY_LABEL_CLIENT})",
+                    lambda: self._on_client_lookup(),
+                ),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("About", self._menu_about),
                 pystray.Menu.SEPARATOR,
@@ -161,6 +181,7 @@ class AutoReplyApp:
         logger.info("AutoReply AI is running!")
         logger.info("%s — quick reply (current view)", _HOTKEY_LABEL_QUICK)
         logger.info("%s — deep scan (scroll for history)", _HOTKEY_LABEL_DEEP)
+        logger.info("%s — client lookup (demo clients)", _HOTKEY_LABEL_CLIENT)
         logger.info("=" * 50)
 
     def run(self):
@@ -275,13 +296,42 @@ class AutoReplyApp:
     def _handle_close(self):
         logger.info("Overlay closed")
 
+    # ── Client Lookup ────────────────────────────────────────────
+
+    def _on_client_lookup(self):
+        """Open the Client Lookup window."""
+        if self._client_window and self._client_window.root:
+            logger.info("Client Lookup window already open")
+            return
+        threading.Thread(target=self._show_client_lookup, daemon=True).start()
+
+    def _show_client_lookup(self):
+        """Create and show the Client Lookup window."""
+        try:
+            self._client_window = ClientLookupWindow(
+                on_close=self._on_client_window_close,
+            )
+            self._client_window.show()
+            self._client_window.run_loop()
+        except Exception as e:
+            logger.error("Client Lookup error: %s", e, exc_info=True)
+        finally:
+            self._client_window = None
+
+    def _on_client_window_close(self):
+        logger.info("Client Lookup window closed")
+        self._client_window = None
+
+    # ── Menu ─────────────────────────────────────────────────────
+
     def _menu_about(self):
         import tkinter.messagebox as mb
         mb.showinfo(
             "AutoReply AI",
             f"Universal AI Sales Assistant\n\n"
             f"{_HOTKEY_LABEL_QUICK} — Quick reply (current view)\n"
-            f"{_HOTKEY_LABEL_DEEP} — Deep scan (scroll for full history)\n\n"
+            f"{_HOTKEY_LABEL_DEEP} — Deep scan (scroll for full history)\n"
+            f"{_HOTKEY_LABEL_CLIENT} — Client Lookup (demo clients)\n\n"
             f"Uses OS Accessibility API to read text from any chat,\n"
             f"then Gemini AI generates the optimal sales reply.\n\n"
             f"Falls back to screenshot if text extraction fails.",

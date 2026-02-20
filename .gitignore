@@ -9,3 +9,6 @@ venv/
 data.db
 *.db
 .DS_Store
+build/
+dist/
+*.spec

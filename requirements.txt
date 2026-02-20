@@ -3,6 +3,7 @@ google-generativeai>=0.8.0
 Pillow>=10.0.0
 
 # Desktop App (cross-platform)
+requests>=2.31.0
 pystray>=0.19.0
 pynput>=1.7.0
 pyperclip>=1.9.0
