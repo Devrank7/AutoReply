@@ -99,8 +99,8 @@ class ClientLookupWindow:
         self._build_header("Client Lookup")
 
         # Search bar
-        search_frame = tk.Frame(self.root, bg=_BG, padx=16, pady=(12, 4))
-        search_frame.pack(fill=tk.X)
+        search_frame = tk.Frame(self.root, bg=_BG)
+        search_frame.pack(fill=tk.X, padx=16, pady=(12, 4))
 
         tk.Label(
             search_frame, text="Search:", font=("Helvetica", 11), fg=_TEXT_DIM, bg=_BG
