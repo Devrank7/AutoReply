@@ -164,10 +164,18 @@ class ClientLookupWindow:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
+        self._canvas = canvas
+
+        def _scroll(delta):
+            try:
+                canvas.yview_scroll(delta, "units")
+            except tk.TclError:
+                pass
+
         canvas.bind_all("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(-1 * (e.delta // 120 or (-1 if e.delta < 0 else 1)), "units"))
-        canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-3, "units"))
-        canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(3, "units"))
+                        lambda e: _scroll(-1 * (e.delta // 120 or (-1 if e.delta < 0 else 1))))
+        canvas.bind_all("<Button-4>", lambda e: _scroll(-3))
+        canvas.bind_all("<Button-5>", lambda e: _scroll(3))
 
         self._populate_list()
         self.root.update()
@@ -422,6 +430,14 @@ class ClientLookupWindow:
         self._show_client_detail(client)
 
     def _close(self):
+        # Unbind global scroll handlers before destroying the canvas
+        if self.root:
+            try:
+                self.root.unbind_all("<MouseWheel>")
+                self.root.unbind_all("<Button-4>")
+                self.root.unbind_all("<Button-5>")
+            except Exception:
+                pass
         if self.root:
             try:
                 self.root.destroy()
