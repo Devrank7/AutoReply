@@ -198,18 +198,25 @@ class AutoReplyApp:
         logger.info("=" * 50)
 
     def run(self):
-        """Start the app: tray in background thread, tkinter mainloop on main thread."""
-        # pystray in a daemon thread (tray icon may not appear on macOS, that's OK)
-        tray_thread = threading.Thread(target=self._run_tray, daemon=True)
-        tray_thread.start()
+        """Start the app: tkinter mainloop on main thread.
 
-        # Main thread: tkinter event loop (required for macOS GUI)
-        # Handle Ctrl+C gracefully
+        On macOS, NSApplication (used by both pystray and Tk) must run on the
+        main thread. Since tkinter drives the Cocoa event loop via Tk_Init,
+        pystray cannot also run its own NSApplication loop — doing so from any
+        thread causes SIGTRAP on macOS 15+. So on macOS we skip pystray and
+        rely on hotkeys alone. On Windows, pystray works fine in a daemon thread.
+        """
+        if not IS_MACOS:
+            # Windows/Linux: pystray in a daemon thread is safe
+            threading.Thread(target=self._run_tray, daemon=True).start()
+        else:
+            logger.info("macOS: system tray skipped (use hotkeys; Ctrl+C to quit)")
+
         self._tk_root.protocol("WM_DELETE_WINDOW", self._menu_quit)
         self._tk_root.mainloop()
 
     def _run_tray(self):
-        """Run pystray in a daemon thread."""
+        """Run pystray in a daemon thread (Windows/Linux only)."""
         try:
             self.tray.run()
         except Exception as e:
