@@ -1,16 +1,17 @@
 import logging
 from PIL import Image
-import google.generativeai as genai
+from google import genai
 
 from config import GEMINI_API_KEY, SYSTEM_PROMPT_PATH
 
 logger = logging.getLogger(__name__)
 
+_MODEL = "gemini-2.0-flash"
+
 
 class AIAgent:
     def __init__(self):
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
+        self.client = genai.Client(api_key=GEMINI_API_KEY)
 
     def _load_system_prompt(self) -> str:
         """Load system prompt from file (re-reads each time for hot-reload)."""
@@ -75,7 +76,7 @@ RULES:
 YOUR REPLY:
 """
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(model=_MODEL, contents=prompt)
             reply = response.text.strip()
             logger.info("Text-based AI generated reply (%d chars)", len(reply))
             return reply
@@ -127,7 +128,7 @@ RULES:
 YOUR REPLY:
 """
         try:
-            response = self.model.generate_content([vision_prompt, img])
+            response = self.client.models.generate_content(model=_MODEL, contents=[vision_prompt, img])
             reply = response.text.strip()
             logger.info("Vision AI generated reply (%d chars)", len(reply))
             return reply

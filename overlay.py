@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 class OverlayWindow:
     """Floating overlay window that shows AI-suggested replies."""
 
-    def __init__(self, on_paste=None, on_regen=None, on_close=None):
+    def __init__(self, master=None, on_paste=None, on_regen=None, on_close=None):
+        self.master = master
         self.on_paste = on_paste
         self.on_regen = on_regen
         self.on_close = on_close
@@ -18,14 +19,14 @@ class OverlayWindow:
         self._current_suggestion = ""
 
     def _create_window(self):
-        """Create the tkinter overlay window."""
+        """Create the tkinter overlay window as a Toplevel."""
         if self.root is not None:
             try:
                 self.root.destroy()
             except Exception:
                 pass
 
-        self.root = tk.Tk()
+        self.root = tk.Toplevel(self.master) if self.master else tk.Tk()
         self.root.title("AutoReply AI")
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(False)
@@ -220,9 +221,8 @@ class OverlayWindow:
             self.root = None
 
     def run_loop(self):
-        """Start the tkinter main loop (blocks)."""
-        if self.root:
-            self.root.mainloop()
+        """No-op: main thread's mainloop handles events."""
+        pass
 
     def update(self):
         """Process pending tkinter events without blocking."""

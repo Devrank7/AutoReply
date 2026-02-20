@@ -24,6 +24,7 @@ import logging
 import sys
 import threading
 import time
+import tkinter as tk
 
 import pyautogui
 import pystray
@@ -127,7 +128,15 @@ class Hotkey:
 
 
 class AutoReplyApp:
-    """Cross-platform system tray application."""
+    """Cross-platform application with tkinter on the main thread.
+
+    On macOS, all GUI (tkinter) operations MUST happen on the main thread.
+    Architecture:
+      - Main thread: hidden tkinter root + mainloop (processes all GUI events)
+      - Daemon thread: pystray system tray icon
+      - Daemon thread: pynput hotkey listener
+      - Worker threads: AI generation, API calls (schedule UI updates via root.after)
+    """
 
     def __init__(self):
         self.platform = get_platform()
@@ -141,18 +150,22 @@ class AutoReplyApp:
         self._busy = False
         self._client_window = None
 
-        # Global hotkeys
+        # Hidden tkinter root — MUST be created on the main thread
+        self._tk_root = tk.Tk()
+        self._tk_root.withdraw()
+
+        # Global hotkeys (schedule UI work on main thread via _tk_root.after)
         self.hotkey = Hotkey(
-            on_quick=lambda: self._on_hotkey(deep=False),
-            on_deep=lambda: self._on_hotkey(deep=True),
-            on_client=lambda: self._on_client_lookup(),
+            on_quick=lambda: self._tk_root.after(0, lambda: self._on_hotkey(deep=False)),
+            on_deep=lambda: self._tk_root.after(0, lambda: self._on_hotkey(deep=True)),
+            on_client=lambda: self._tk_root.after(0, self._on_client_lookup),
         )
         self.hotkey.start()
 
         # Check OS permissions
         self.platform.check_permissions()
 
-        # System tray icon
+        # System tray icon (runs in a daemon thread)
         self.tray = pystray.Icon(
             "AutoReply AI",
             icon=_create_tray_icon_image(),
@@ -160,20 +173,20 @@ class AutoReplyApp:
             menu=pystray.Menu(
                 pystray.MenuItem(
                     f"Quick Reply ({_HOTKEY_LABEL_QUICK})",
-                    lambda: self._on_hotkey(deep=False),
+                    lambda: self._tk_root.after(0, lambda: self._on_hotkey(deep=False)),
                 ),
                 pystray.MenuItem(
                     f"Deep Scan ({_HOTKEY_LABEL_DEEP})",
-                    lambda: self._on_hotkey(deep=True),
+                    lambda: self._tk_root.after(0, lambda: self._on_hotkey(deep=True)),
                 ),
                 pystray.MenuItem(
                     f"Client Lookup ({_HOTKEY_LABEL_CLIENT})",
-                    lambda: self._on_client_lookup(),
+                    lambda: self._tk_root.after(0, self._on_client_lookup),
                 ),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("About", self._menu_about),
+                pystray.MenuItem("About", lambda: self._tk_root.after(0, self._menu_about)),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Quit", self._menu_quit),
+                pystray.MenuItem("Quit", lambda: self._tk_root.after(0, self._menu_quit)),
             ),
         )
 
@@ -185,34 +198,44 @@ class AutoReplyApp:
         logger.info("=" * 50)
 
     def run(self):
-        """Start the system tray icon (blocks the main thread)."""
-        self.tray.run()
+        """Start the app: tray in background thread, tkinter mainloop on main thread."""
+        # pystray in a daemon thread (tray icon may not appear on macOS, that's OK)
+        tray_thread = threading.Thread(target=self._run_tray, daemon=True)
+        tray_thread.start()
+
+        # Main thread: tkinter event loop (required for macOS GUI)
+        # Handle Ctrl+C gracefully
+        self._tk_root.protocol("WM_DELETE_WINDOW", self._menu_quit)
+        self._tk_root.mainloop()
+
+    def _run_tray(self):
+        """Run pystray in a daemon thread."""
+        try:
+            self.tray.run()
+        except Exception as e:
+            logger.warning("System tray unavailable: %s", e)
 
     def _on_hotkey(self, deep: bool = False):
         if self._busy:
             logger.info("Already processing, ignoring hotkey")
             return
-        threading.Thread(target=self._process, args=(deep,), daemon=True).start()
-
-    def _process(self, deep: bool):
-        """Main flow: extract text → AI → overlay."""
         self._busy = True
+        # Create overlay on main thread, then start background AI work
         mode = "deep" if deep else "quick"
+        logger.info("[%s] Extracting text from active window...", mode)
+        threading.Thread(target=self._process_bg, args=(deep,), daemon=True).start()
 
+    def _process_bg(self, deep: bool):
+        """Background: extract text + call AI. Schedules UI updates on main thread."""
+        mode = "deep" if deep else "quick"
         try:
             # 1. Extract conversation text via OS Accessibility API
-            logger.info("[%s] Extracting text from active window...", mode)
             text, app_name = self.platform.extract_conversation(deep=deep)
             self._source_app = app_name
             self._last_app_name = app_name
 
-            # 2. Show overlay in loading state
-            self.overlay = OverlayWindow(
-                on_paste=self._handle_paste,
-                on_regen=self._handle_regen,
-                on_close=self._handle_close,
-            )
-            self.overlay.show_loading()
+            # 2. Create overlay on main thread
+            self._tk_root.after(0, lambda: self._create_overlay_loading())
 
             # 3. Choose method based on extraction result
             if len(text) >= _MIN_TEXT_LENGTH:
@@ -237,21 +260,42 @@ class AutoReplyApp:
 
             self._last_suggestion = reply
 
-            # 4. Show the reply
-            self.overlay.show_reply(reply)
-            logger.info("[%s] Reply shown in overlay", mode)
-            self.overlay.run_loop()
+            # 4. Show the reply on main thread
+            self._tk_root.after(0, lambda: self._show_overlay_reply(reply, mode))
 
         except Exception as e:
             logger.error("Error: %s", e, exc_info=True)
-            if self.overlay:
-                try:
-                    self.overlay.show_error(str(e))
-                    self.overlay.run_loop()
-                except Exception:
-                    pass
-        finally:
-            self._busy = False
+            self._tk_root.after(0, lambda: self._show_overlay_error(str(e)))
+
+    def _create_overlay_loading(self):
+        """Main thread: create and show overlay in loading state."""
+        self.overlay = OverlayWindow(
+            master=self._tk_root,
+            on_paste=self._handle_paste,
+            on_regen=self._handle_regen,
+            on_close=self._handle_close,
+        )
+        self.overlay.show_loading()
+
+    def _show_overlay_reply(self, reply: str, mode: str):
+        """Main thread: show AI reply in overlay."""
+        if self.overlay:
+            self.overlay.show_reply(reply)
+            logger.info("[%s] Reply shown in overlay", mode)
+
+    def _show_overlay_error(self, error_msg: str):
+        """Main thread: show error in overlay."""
+        if self.overlay:
+            self.overlay.show_error(error_msg)
+        else:
+            self.overlay = OverlayWindow(
+                master=self._tk_root,
+                on_paste=None,
+                on_regen=None,
+                on_close=self._handle_close,
+            )
+            self.overlay.show_error(error_msg)
+        self._busy = False
 
     def _handle_paste(self, text: str):
         """Copy text to clipboard and simulate paste in the source app."""
@@ -285,38 +329,31 @@ class AutoReplyApp:
 
                 self._last_suggestion = reply
                 if self.overlay:
-                    self.overlay.show_reply(reply)
+                    self._tk_root.after(0, lambda: self.overlay.show_reply(reply))
             except Exception as e:
                 logger.error("Regeneration error: %s", e)
                 if self.overlay:
-                    self.overlay.show_error(str(e))
+                    self._tk_root.after(0, lambda: self.overlay.show_error(str(e)))
 
         threading.Thread(target=do_regen, daemon=True).start()
 
     def _handle_close(self):
         logger.info("Overlay closed")
+        self.overlay = None
+        self._busy = False
 
     # ── Client Lookup ────────────────────────────────────────────
 
     def _on_client_lookup(self):
-        """Open the Client Lookup window."""
+        """Open the Client Lookup window (called on main thread)."""
         if self._client_window and self._client_window.root:
             logger.info("Client Lookup window already open")
             return
-        threading.Thread(target=self._show_client_lookup, daemon=True).start()
-
-    def _show_client_lookup(self):
-        """Create and show the Client Lookup window."""
-        try:
-            self._client_window = ClientLookupWindow(
-                on_close=self._on_client_window_close,
-            )
-            self._client_window.show()
-            self._client_window.run_loop()
-        except Exception as e:
-            logger.error("Client Lookup error: %s", e, exc_info=True)
-        finally:
-            self._client_window = None
+        self._client_window = ClientLookupWindow(
+            master=self._tk_root,
+            on_close=self._on_client_window_close,
+        )
+        self._client_window.show()
 
     def _on_client_window_close(self):
         logger.info("Client Lookup window closed")
@@ -339,7 +376,11 @@ class AutoReplyApp:
 
     def _menu_quit(self):
         self.hotkey.stop()
-        self.tray.stop()
+        try:
+            self.tray.stop()
+        except Exception:
+            pass
+        self._tk_root.quit()
 
 
 if __name__ == "__main__":

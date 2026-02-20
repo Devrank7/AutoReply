@@ -4,11 +4,13 @@ import logging
 import re
 
 import requests
-import google.generativeai as genai
+from google import genai
 
 from config import GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
+
+_MODEL = "gemini-2.0-flash"
 
 
 class AnalysisError(Exception):
@@ -32,8 +34,7 @@ class ClientAnalyzer:
     ]
 
     def __init__(self):
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
+        self.client = genai.Client(api_key=GEMINI_API_KEY)
 
     def fetch_website_content(self, url: str) -> str:
         """Fetch HTML from a client's website (truncated to 50K chars)."""
@@ -106,7 +107,7 @@ RULES:
 YOUR ANALYSIS:"""
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(model=_MODEL, contents=prompt)
             analysis = response.text.strip()
             if len(analysis) > 500:
                 analysis = analysis[:497] + "..."
@@ -148,7 +149,7 @@ RULES — follow these EXACTLY:
 YOUR MESSAGE:"""
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(model=_MODEL, contents=prompt)
             message = response.text.strip()
             logger.info("First message generated (%d chars)", len(message))
             return message

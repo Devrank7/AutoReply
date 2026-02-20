@@ -29,7 +29,8 @@ _TEXT_BRIGHT = "#fff"
 class ClientLookupWindow:
     """Two-view window: client list and client detail."""
 
-    def __init__(self, on_close=None):
+    def __init__(self, master=None, on_close=None):
+        self.master = master
         self.on_close = on_close
         self.root = None
 
@@ -53,7 +54,7 @@ class ClientLookupWindow:
             except Exception:
                 pass
 
-        self.root = tk.Tk()
+        self.root = tk.Toplevel(self.master) if self.master else tk.Tk()
         self.root.title("Client Lookup — WinBix AI")
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(False)
@@ -643,5 +644,5 @@ class ClientLookupWindow:
         threading.Thread(target=self._load_clients, daemon=True).start()
 
     def run_loop(self):
-        if self.root:
-            self.root.mainloop()
+        """No-op: main thread's mainloop handles events."""
+        pass
