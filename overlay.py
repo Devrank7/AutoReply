@@ -96,22 +96,23 @@ class OverlayWindow:
 
     def _add_btn(self, parent, text: str, command, style: str = "secondary"):
         cfg = {
-            "primary":   (_ACCENT,   _TEXT_BTN, _ACCENT_D),
-            "secondary": (_BG_WHITE, _TEXT,     _BG),
-            "ghost":     (_BG,       _TEXT_SEC, _BG_WHITE),
-        }.get(style, (_BG_WHITE, _TEXT, _BG))
+            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_D),
+            "secondary": ("#E9E9EE",  _TEXT,     "#D8D8DE"),
+            "ghost":     ("#E9E9EE",  _TEXT_SEC, "#D8D8DE"),
+        }.get(style, ("#E9E9EE", _TEXT, "#D8D8DE"))
         bg, fg, hover = cfg
 
-        wrap = tk.Frame(parent, bg=_SEP if style == "secondary" else bg)
+        font = ("Helvetica Neue", 12, "bold") if style == "primary" else ("Helvetica Neue", 12)
+
+        wrap = tk.Frame(parent, bg=parent.cget("bg"))
         btn = tk.Button(
             wrap, text=text,
-            font=("Helvetica Neue", 12), fg=fg, bg=bg,
+            font=font, fg=fg, bg=bg,
             activebackground=hover, activeforeground=fg,
-            bd=0, padx=14, pady=6, cursor="hand2",
+            bd=0, padx=16, pady=8, cursor="hand2",
             relief=tk.FLAT, command=command,
         )
-        btn.pack(padx=1 if style == "secondary" else 0,
-                 pady=1 if style == "secondary" else 0)
+        btn.pack()
         btn.bind("<Enter>", lambda _: btn.configure(bg=hover))
         btn.bind("<Leave>", lambda _: btn.configure(bg=bg))
         return wrap

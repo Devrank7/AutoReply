@@ -1,6 +1,9 @@
 """Client Lookup Window — browse demo clients, analyze websites, generate outreach."""
 
 import logging
+import os
+import subprocess
+import sys
 import threading
 import tkinter as tk
 
@@ -179,6 +182,7 @@ class ClientLookupWindow:
 
         self._populate_list()
         self.root.update()
+        self.root.after(80, self._bring_to_front)
 
     def _populate_list(self):
         for w in self._list_inner.winfo_children():
@@ -329,7 +333,7 @@ class ClientLookupWindow:
         # Copy button
         copy_row = tk.Frame(content, bg=_BG)
         copy_row.pack(fill=tk.X, padx=20, pady=14)
-        self._make_btn(copy_row, "Copy to Clipboard", self._copy_result, "ghost"
+        self._make_btn(copy_row, "Copy to Clipboard", self._copy_result, "secondary"
                        ).pack(side=tk.LEFT)
 
         self.root.update()
@@ -338,23 +342,27 @@ class ClientLookupWindow:
 
     def _make_btn(self, parent, text: str, command, style: str = "secondary"):
         """Return a styled button wrapper frame."""
+        # primary  = filled Apple-blue pill, bold text
+        # secondary = light-gray surface (visible even against white/gray bg)
+        # ghost    = same surface + blue text, for low-emphasis actions
         cfg = {
-            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_DIM),
-            "secondary": (_BG_WHITE,  _TEXT,     _HOVER_ROW),
-            "ghost":     (_BG,        _ACCENT,   _BG),
-        }.get(style, (_BG_WHITE, _TEXT, _HOVER_ROW))
-        bg, fg, hover = cfg
+            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_DIM, False),
+            "secondary": ("#E9E9EE",  _TEXT,     "#D8D8DE",   False),
+            "ghost":     ("#E9E9EE",  _ACCENT,   "#D8D8DE",   False),
+        }.get(style, ("#E9E9EE", _TEXT, "#D8D8DE", False))
+        bg, fg, hover, _ = cfg
 
-        wrap = tk.Frame(parent, bg=_SEP if style == "secondary" else bg)
+        font = ("Helvetica Neue", 13, "bold") if style == "primary" else ("Helvetica Neue", 13)
+
+        wrap = tk.Frame(parent, bg=parent.cget("bg"))
         btn = tk.Button(
             wrap, text=text,
-            font=("Helvetica Neue", 13), fg=fg, bg=bg,
+            font=font, fg=fg, bg=bg,
             activebackground=hover, activeforeground=fg,
-            bd=0, padx=16, pady=7, cursor="hand2",
+            bd=0, padx=20, pady=9, cursor="hand2",
             relief=tk.FLAT, command=command,
         )
-        btn.pack(padx=1 if style == "secondary" else 0,
-                 pady=1 if style == "secondary" else 0)
+        btn.pack()
         btn.bind("<Enter>", lambda e: btn.configure(bg=hover))
         btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
         return wrap
@@ -428,6 +436,25 @@ class ClientLookupWindow:
         self._selected_client = client
         self._short_url = self._pain_points = self._first_message = None
         self._show_client_detail(client)
+
+    def _bring_to_front(self):
+        """Lift the window above all others and activate the app (macOS fix)."""
+        if not self.root:
+            return
+        self.root.lift()
+        self.root.focus_force()
+        if sys.platform == "darwin":
+            # On macOS a background Python process won't auto-activate even with
+            # -topmost True.  AppleScript activates the process by PID so the
+            # window pops in front of whatever app had focus (e.g. Chrome).
+            subprocess.run(
+                [
+                    "osascript", "-e",
+                    f'tell application "System Events" to set frontmost of'
+                    f' (first process whose unix id is {os.getpid()}) to true',
+                ],
+                check=False,
+            )
 
     def _close(self):
         # Unbind global scroll handlers before destroying the canvas
