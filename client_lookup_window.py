@@ -3,7 +3,6 @@
 import logging
 import threading
 import tkinter as tk
-from tkinter import font as tkfont
 
 import pyperclip
 
@@ -13,41 +12,46 @@ from services.client_analyzer import ClientAnalyzer, AnalysisError
 
 logger = logging.getLogger(__name__)
 
-# ── Color palette (matches overlay.py) ──────────────────────────
-_BG = "#1a1a2e"
-_BG_HEADER = "#16213e"
-_BG_INPUT = "#0f3460"
-_ACCENT = "#e94560"
-_ACCENT_HOVER = "#ff6b81"
-_PURPLE = "#533483"
-_PURPLE_HOVER = "#7952b3"
-_TEXT = "#eee"
-_TEXT_DIM = "#aaa"
-_TEXT_BRIGHT = "#fff"
+# ── Apple macOS light color palette ─────────────────────────────
+_BG         = "#F2F2F7"   # Window background (macOS secondary bg)
+_BG_WHITE   = "#FFFFFF"   # Card / input background
+_SEP        = "#C6C6C8"   # Separator / border
+_ACCENT     = "#007AFF"   # Apple blue
+_ACCENT_DIM = "#0064D0"   # Hover blue
+_TEXT       = "#1C1C1E"   # Primary label
+_TEXT_SEC   = "#8E8E93"   # Secondary label
+_TEXT_BTN   = "#FFFFFF"   # Button text on colored bg
+_HOVER_ROW  = "#F5F5F7"   # Row hover
+
+
+def _sep(parent):
+    """1 px horizontal separator."""
+    f = tk.Frame(parent, bg=_SEP, height=1)
+    f.pack(fill=tk.X)
+    return f
 
 
 class ClientLookupWindow:
-    """Two-view window: client list and client detail."""
+    """Two-view window: client list → client detail."""
 
     def __init__(self, master=None, on_close=None):
-        self.master = master
+        self.master   = master
         self.on_close = on_close
-        self.root = None
+        self.root     = None
 
         self.client_api = ClientAPI()
-        self.analyzer = ClientAnalyzer()
+        self.analyzer   = ClientAnalyzer()
 
-        self._clients = []
+        self._clients          = []
         self._filtered_clients = []
-        self._selected_client = None
-        self._short_url = None
-        self._pain_points = None
-        self._first_message = None
+        self._selected_client  = None
+        self._short_url        = None
+        self._pain_points      = None
+        self._first_message    = None
 
     # ── Window creation ──────────────────────────────────────────
 
     def show(self):
-        """Create the window and start loading clients."""
         if self.root is not None:
             try:
                 self.root.destroy()
@@ -55,509 +59,336 @@ class ClientLookupWindow:
                 pass
 
         self.root = tk.Toplevel(self.master) if self.master else tk.Tk()
-        self.root.title("Client Lookup — WinBix AI")
+        self.root.title("Client Lookup")
         self.root.attributes("-topmost", True)
-        self.root.overrideredirect(False)
-
-        width, height = 700, 550
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        x = (screen_w - width) // 2
-        y = (screen_h - height) // 2
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.configure(bg=_BG)
         self.root.resizable(True, True)
-        self.root.minsize(600, 450)
+        self.root.minsize(600, 440)
+
+        w, h = 720, 580
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
         self.root.bind("<Escape>", lambda e: self._close())
 
-        self._show_loading("Fetching clients...")
+        self._show_loading("Loading clients…")
         threading.Thread(target=self._load_clients, daemon=True).start()
 
-    def _clear_content(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
+    def _clear(self):
+        for w in self.root.winfo_children():
+            w.destroy()
 
     # ── Loading screen ───────────────────────────────────────────
 
-    def _show_loading(self, message: str):
-        self._clear_content()
+    def _show_loading(self, msg: str):
+        self._clear()
         self._build_header("Client Lookup")
-        tk.Label(
-            self.root,
-            text=message,
-            font=("Helvetica", 13),
-            fg=_TEXT_DIM,
-            bg=_BG,
-            pady=40,
-        ).pack(expand=True)
+        _sep(self.root)
+        f = tk.Frame(self.root, bg=_BG)
+        f.pack(expand=True)
+        tk.Label(f, text=msg, font=("Helvetica Neue", 14),
+                 fg=_TEXT_SEC, bg=_BG).pack(pady=16)
         self.root.update()
 
-    # ── View 1: Client list ──────────────────────────────────────
+    # ── View 1 — Client list ─────────────────────────────────────
 
     def _show_client_list(self):
-        self._clear_content()
+        self._clear()
         self._build_header("Client Lookup")
+        _sep(self.root)
 
-        # Search bar
-        search_frame = tk.Frame(self.root, bg=_BG)
-        search_frame.pack(fill=tk.X, padx=16, pady=(12, 4))
+        # ── Search / filter bar (white panel) ────────────────────
+        bar = tk.Frame(self.root, bg=_BG_WHITE)
+        bar.pack(fill=tk.X)
 
-        tk.Label(
-            search_frame, text="Search:", font=("Helvetica", 11), fg=_TEXT_DIM, bg=_BG
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        inner = tk.Frame(bar, bg=_BG_WHITE)
+        inner.pack(fill=tk.X, padx=20, pady=10)
 
+        # Search field
+        search_bg = tk.Frame(inner, bg=_BG, bd=0)
+        search_bg.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=1)
+        tk.Label(search_bg, text="⌕", font=("Helvetica Neue", 14),
+                 fg=_TEXT_SEC, bg=_BG).pack(side=tk.LEFT, padx=(8, 2))
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._apply_filters())
-        tk.Entry(
-            search_frame,
-            textvariable=self._search_var,
-            font=("Helvetica", 12),
-            fg=_TEXT,
-            bg=_BG_INPUT,
-            insertbackground=_ACCENT,
-            bd=0,
-            relief=tk.FLAT,
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4, padx=(0, 12))
+        tk.Entry(search_bg, textvariable=self._search_var,
+                 font=("Helvetica Neue", 13), fg=_TEXT, bg=_BG,
+                 insertbackground=_ACCENT, bd=0, relief=tk.FLAT
+                 ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 8))
 
-        # Date filters
-        tk.Label(
-            search_frame, text="From:", font=("Helvetica", 11), fg=_TEXT_DIM, bg=_BG
-        ).pack(side=tk.LEFT, padx=(0, 4))
-
+        # Date range
+        tk.Label(inner, text="From", font=("Helvetica Neue", 12),
+                 fg=_TEXT_SEC, bg=_BG_WHITE).pack(side=tk.LEFT, padx=(14, 4))
         self._date_from_var = tk.StringVar()
         self._date_from_var.trace_add("write", lambda *_: self._apply_filters())
-        tk.Entry(
-            search_frame,
-            textvariable=self._date_from_var,
-            width=12,
-            font=("Helvetica", 11),
-            fg=_TEXT,
-            bg=_BG_INPUT,
-            insertbackground=_ACCENT,
-            bd=0,
-            relief=tk.FLAT,
-        ).pack(side=tk.LEFT, ipady=4, padx=(0, 8))
+        tk.Entry(inner, textvariable=self._date_from_var, width=10,
+                 font=("Helvetica Neue", 12), fg=_TEXT, bg=_BG,
+                 insertbackground=_ACCENT, bd=0, relief=tk.FLAT
+                 ).pack(side=tk.LEFT, ipady=6)
 
-        tk.Label(
-            search_frame, text="To:", font=("Helvetica", 11), fg=_TEXT_DIM, bg=_BG
-        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(inner, text="–", font=("Helvetica Neue", 12),
+                 fg=_TEXT_SEC, bg=_BG_WHITE).pack(side=tk.LEFT, padx=4)
 
         self._date_to_var = tk.StringVar()
         self._date_to_var.trace_add("write", lambda *_: self._apply_filters())
-        tk.Entry(
-            search_frame,
-            textvariable=self._date_to_var,
-            width=12,
-            font=("Helvetica", 11),
-            fg=_TEXT,
-            bg=_BG_INPUT,
-            insertbackground=_ACCENT,
-            bd=0,
-            relief=tk.FLAT,
-        ).pack(side=tk.LEFT, ipady=4)
+        tk.Entry(inner, textvariable=self._date_to_var, width=10,
+                 font=("Helvetica Neue", 12), fg=_TEXT, bg=_BG,
+                 insertbackground=_ACCENT, bd=0, relief=tk.FLAT
+                 ).pack(side=tk.LEFT, ipady=6)
+
+        _sep(self.root)
 
         # Count label
         self._count_label = tk.Label(
             self.root,
-            text=f"Showing {len(self._filtered_clients)} of {len(self._clients)} clients",
-            font=("Helvetica", 10),
-            fg=_TEXT_DIM,
-            bg=_BG,
-            pady=4,
+            text=f"{len(self._filtered_clients)} clients",
+            font=("Helvetica Neue", 11), fg=_TEXT_SEC, bg=_BG, anchor="w",
         )
-        self._count_label.pack(fill=tk.X, padx=16)
+        self._count_label.pack(fill=tk.X, padx=20, pady=(10, 4))
 
-        # Scrollable list
-        list_frame = tk.Frame(self.root, bg=_BG, padx=16)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        # ── Scrollable client list ────────────────────────────────
+        wrap = tk.Frame(self.root, bg=_BG)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 16))
 
-        canvas = tk.Canvas(list_frame, bg=_BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
+        canvas = tk.Canvas(wrap, bg=_BG, highlightthickness=0)
+        sb = tk.Scrollbar(wrap, orient=tk.VERTICAL, command=canvas.yview)
         self._list_inner = tk.Frame(canvas, bg=_BG)
 
         self._list_inner.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
         )
         canvas.create_window((0, 0), window=self._list_inner, anchor="nw", tags="inner")
-
-        # Make inner frame fill canvas width
-        def _resize_inner(event):
-            canvas.itemconfig("inner", width=event.width)
-
-        canvas.bind("<Configure>", _resize_inner)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig("inner", width=e.width))
+        canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Mouse wheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(-1 * (event.delta // 120 or (-1 if event.delta < 0 else 1)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # macOS trackpad
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-1 * (e.delta // 120 or (-1 if e.delta < 0 else 1)), "units"))
         canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-3, "units"))
         canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(3, "units"))
 
-        self._canvas = canvas
-        self._populate_client_list()
+        self._populate_list()
         self.root.update()
 
-    def _populate_client_list(self):
-        for widget in self._list_inner.winfo_children():
-            widget.destroy()
+    def _populate_list(self):
+        for w in self._list_inner.winfo_children():
+            w.destroy()
 
         for client in self._filtered_clients:
-            row = tk.Frame(self._list_inner, bg=_BG_INPUT, padx=12, pady=8, cursor="hand2")
-            row.pack(fill=tk.X, pady=2)
+            card = tk.Frame(self._list_inner, bg=_BG_WHITE, cursor="hand2")
+            card.pack(fill=tk.X, pady=(0, 1))
 
-            tk.Label(
-                row,
-                text=client.get("name", "Unknown"),
-                font=("Helvetica", 12, "bold"),
-                fg=_TEXT,
-                bg=_BG_INPUT,
-                anchor="w",
-            ).pack(fill=tk.X)
+            body = tk.Frame(card, bg=_BG_WHITE)
+            body.pack(fill=tk.X, padx=16, pady=12)
 
-            detail_parts = []
-            website = client.get("website", "")
-            if website:
-                detail_parts.append(website)
-            created = client.get("createdAt", "")
-            if created:
-                detail_parts.append(created[:10])
-            tk.Label(
-                row,
-                text="  |  ".join(detail_parts),
-                font=("Helvetica", 10),
-                fg=_TEXT_DIM,
-                bg=_BG_INPUT,
-                anchor="w",
-            ).pack(fill=tk.X)
+            # Name + chevron
+            top_row = tk.Frame(body, bg=_BG_WHITE)
+            top_row.pack(fill=tk.X)
+            tk.Label(top_row, text=client.get("name", "Unknown"),
+                     font=("Helvetica Neue", 13, "bold"),
+                     fg=_TEXT, bg=_BG_WHITE, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(top_row, text="›", font=("Helvetica Neue", 18),
+                     fg=_TEXT_SEC, bg=_BG_WHITE).pack(side=tk.RIGHT)
 
-            # Click handler
-            def make_handler(c):
+            # Sub-line
+            parts = []
+            if w := client.get("website", ""):
+                parts.append(w)
+            if d := (client.get("createdAt", "") or "")[:10]:
+                parts.append(d)
+            if parts:
+                tk.Label(body, text="  ·  ".join(parts),
+                         font=("Helvetica Neue", 11), fg=_TEXT_SEC,
+                         bg=_BG_WHITE, anchor="w").pack(fill=tk.X, pady=(2, 0))
+
+            def _handler(c):
                 return lambda e: self._select_client(c)
 
-            row.bind("<Button-1>", make_handler(client))
-            for child in row.winfo_children():
-                child.bind("<Button-1>", make_handler(client))
+            def _enter(_, c=card, b=body):
+                c.configure(bg=_HOVER_ROW)
+                b.configure(bg=_HOVER_ROW)
+                for ch in b.winfo_children():
+                    for gch in ([ch] + list(ch.winfo_children())):
+                        try:
+                            gch.configure(bg=_HOVER_ROW)
+                        except Exception:
+                            pass
 
-            # Hover
-            def on_enter(e, r=row):
-                r.configure(bg=_BG_HEADER)
-                for ch in r.winfo_children():
-                    ch.configure(bg=_BG_HEADER)
+            def _leave(_, c=card, b=body):
+                c.configure(bg=_BG_WHITE)
+                b.configure(bg=_BG_WHITE)
+                for ch in b.winfo_children():
+                    for gch in ([ch] + list(ch.winfo_children())):
+                        try:
+                            gch.configure(bg=_BG_WHITE)
+                        except Exception:
+                            pass
 
-            def on_leave(e, r=row):
-                r.configure(bg=_BG_INPUT)
-                for ch in r.winfo_children():
-                    ch.configure(bg=_BG_INPUT)
-
-            row.bind("<Enter>", on_enter)
-            row.bind("<Leave>", on_leave)
+            for widget in [card, body] + list(body.winfo_children()):
+                widget.bind("<Button-1>", _handler(client))
+                widget.bind("<Enter>", _enter)
+                widget.bind("<Leave>", _leave)
 
     def _apply_filters(self):
-        query = self._search_var.get()
-        date_from = self._date_from_var.get().strip() or None
-        date_to = self._date_to_var.get().strip() or None
-
-        self._filtered_clients = self.client_api.search_clients(query, date_from, date_to)
+        q  = self._search_var.get()
+        df = self._date_from_var.get().strip() or None
+        dt = self._date_to_var.get().strip() or None
+        self._filtered_clients = self.client_api.search_clients(q, df, dt)
         self._count_label.config(
-            text=f"Showing {len(self._filtered_clients)} of {len(self._clients)} clients"
+            text=f"{len(self._filtered_clients)} of {len(self._clients)} clients"
         )
-        self._populate_client_list()
+        self._populate_list()
 
-    # ── View 2: Client detail ────────────────────────────────────
+    # ── View 2 — Client detail ───────────────────────────────────
 
     def _show_client_detail(self, client: dict):
-        self._clear_content()
-        name = client.get("name", "Client Details")
-        self._build_header(name if len(name) <= 40 else name[:37] + "...", show_back=True)
+        self._clear()
+        name = client.get("name", "Client")
+        self._build_header(name[:46] + ("…" if len(name) > 46 else ""), show_back=True)
+        _sep(self.root)
 
-        # Scrollable content
         outer = tk.Frame(self.root, bg=_BG)
         outer.pack(fill=tk.BOTH, expand=True)
 
         canvas = tk.Canvas(outer, bg=_BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
-        content = tk.Frame(canvas, bg=_BG, padx=20, pady=12)
-
-        content.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window((0, 0), window=content, anchor="nw", tags="detail")
-
-        def _resize_detail(event):
-            canvas.itemconfig("detail", width=event.width)
-
-        canvas.bind("<Configure>", _resize_detail)
-        canvas.configure(yscrollcommand=scrollbar.set)
+        sb = tk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        content = tk.Frame(canvas, bg=_BG)
+        content.bind("<Configure>",
+                     lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=content, anchor="nw", tags="d")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig("d", width=e.width))
+        canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Client info fields
+        # ── Info card ─────────────────────────────────────────────
+        card = tk.Frame(content, bg=_BG_WHITE)
+        card.pack(fill=tk.X, padx=20, pady=(20, 0))
+
         fields = [
-            ("Name", client.get("name", "")),
-            ("Website", client.get("website", "")),
-            ("Email", client.get("email", "") or "N/A"),
-            ("Created", (client.get("createdAt", "") or "")[:10]),
-            ("Demo URL", client.get("demoUrl", "")),
+            ("Website",  client.get("website", "") or "—"),
+            ("Email",    client.get("email", "")   or "—"),
+            ("Created",  (client.get("createdAt", "") or "")[:10] or "—"),
+            ("Demo URL", client.get("demoUrl", "") or "—"),
         ]
-        for label_text, value_text in fields:
-            row = tk.Frame(content, bg=_BG, pady=2)
-            row.pack(fill=tk.X)
-            tk.Label(
-                row,
-                text=f"{label_text}:",
-                width=10,
-                anchor="w",
-                font=("Helvetica", 11, "bold"),
-                fg=_ACCENT,
-                bg=_BG,
-            ).pack(side=tk.LEFT)
-            tk.Label(
-                row,
-                text=value_text,
-                anchor="w",
-                wraplength=500,
-                font=("Helvetica", 11),
-                fg=_TEXT,
-                bg=_BG,
-            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        for i, (lbl, val) in enumerate(fields):
+            if i:
+                tk.Frame(card, bg=_SEP, height=1).pack(fill=tk.X, padx=16)
+            row = tk.Frame(card, bg=_BG_WHITE)
+            row.pack(fill=tk.X, padx=16)
+            tk.Label(row, text=lbl, width=9, anchor="w",
+                     font=("Helvetica Neue", 12), fg=_TEXT_SEC,
+                     bg=_BG_WHITE).pack(side=tk.LEFT, pady=11)
+            tk.Label(row, text=val, anchor="w", wraplength=480,
+                     font=("Helvetica Neue", 12), fg=_TEXT,
+                     bg=_BG_WHITE).pack(side=tk.LEFT, fill=tk.X, expand=True,
+                                        pady=11, padx=(10, 0))
 
-        # Separator
-        tk.Frame(content, bg=_BG_INPUT, height=1).pack(fill=tk.X, pady=12)
+        # ── Action buttons ────────────────────────────────────────
+        btn_row = tk.Frame(content, bg=_BG)
+        btn_row.pack(fill=tk.X, padx=20, pady=20)
 
-        # Action buttons
-        btn_frame = tk.Frame(content, bg=_BG)
-        btn_frame.pack(fill=tk.X, pady=(0, 8))
+        self._make_btn(btn_row, "Shorten URL",
+                       lambda: self._do_shorten_url(client), "secondary"
+                       ).pack(side=tk.LEFT, padx=(0, 8))
+        self._make_btn(btn_row, "Find Hooks",
+                       lambda: self._do_find_hooks(client), "secondary"
+                       ).pack(side=tk.LEFT, padx=(0, 8))
+        self._make_btn(btn_row, "Generate Message",
+                       lambda: self._do_generate_message(client), "primary"
+                       ).pack(side=tk.LEFT)
 
-        btn_style = {
-            "font": ("Helvetica", 11, "bold"),
-            "bd": 0,
-            "padx": 14,
-            "pady": 6,
-            "cursor": "hand2",
-        }
+        # Status
+        self._status_label = tk.Label(content, text="",
+                                      font=("Helvetica Neue", 11),
+                                      fg=_TEXT_SEC, bg=_BG, anchor="w")
+        self._status_label.pack(fill=tk.X, padx=20, pady=(0, 6))
 
-        tk.Button(
-            btn_frame,
-            text="Shorten URL",
-            fg=_TEXT_BRIGHT,
-            bg=_PURPLE,
-            activebackground=_PURPLE_HOVER,
-            command=lambda: self._do_shorten_url(client),
-            **btn_style,
-        ).pack(side=tk.LEFT, padx=(0, 8))
-
-        tk.Button(
-            btn_frame,
-            text="Find Hooks",
-            fg=_TEXT_BRIGHT,
-            bg=_BG_INPUT,
-            activebackground="#1a5276",
-            command=lambda: self._do_find_hooks(client),
-            **btn_style,
-        ).pack(side=tk.LEFT, padx=(0, 8))
-
-        tk.Button(
-            btn_frame,
-            text="Generate Message",
-            fg=_TEXT_BRIGHT,
-            bg=_ACCENT,
-            activebackground=_ACCENT_HOVER,
-            command=lambda: self._do_generate_message(client),
-            **btn_style,
-        ).pack(side=tk.LEFT)
-
-        # Status label
-        self._status_label = tk.Label(
-            content, text="", font=("Helvetica", 10), fg=_TEXT_DIM, bg=_BG, anchor="w"
-        )
-        self._status_label.pack(fill=tk.X, pady=(8, 2))
-
-        # Result text area
+        # Result text area (with 1px border via wrapper)
+        border = tk.Frame(content, bg=_SEP)
+        border.pack(fill=tk.BOTH, expand=True, padx=20)
         self._result_area = tk.Text(
-            content,
-            font=("Helvetica", 12),
-            fg=_TEXT,
-            bg=_BG_INPUT,
-            insertbackground=_ACCENT,
-            selectbackground=_ACCENT,
-            bd=0,
-            padx=10,
-            pady=10,
-            wrap=tk.WORD,
-            height=10,
+            border,
+            font=("Helvetica Neue", 13), fg=_TEXT, bg=_BG_WHITE,
+            insertbackground=_ACCENT, selectbackground=_ACCENT,
+            selectforeground=_TEXT_BTN, bd=0, padx=14, pady=12,
+            wrap=tk.WORD, relief=tk.FLAT, height=9,
         )
-        self._result_area.pack(fill=tk.BOTH, expand=True)
+        self._result_area.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
         # Copy button
-        copy_frame = tk.Frame(content, bg=_BG, pady=6)
-        copy_frame.pack(fill=tk.X)
-
-        tk.Button(
-            copy_frame,
-            text="Copy to Clipboard",
-            fg=_TEXT_BRIGHT,
-            bg=_PURPLE,
-            activebackground=_PURPLE_HOVER,
-            command=self._copy_result,
-            **btn_style,
-        ).pack(side=tk.LEFT)
+        copy_row = tk.Frame(content, bg=_BG)
+        copy_row.pack(fill=tk.X, padx=20, pady=14)
+        self._make_btn(copy_row, "Copy to Clipboard", self._copy_result, "ghost"
+                       ).pack(side=tk.LEFT)
 
         self.root.update()
 
-    # ── Action handlers (run in threads) ─────────────────────────
+    # ── Button factory ───────────────────────────────────────────
 
-    def _do_shorten_url(self, client: dict):
-        demo_url = client.get("demoUrl", "")
-        if not demo_url:
-            self._show_result("Error", "No demo URL available for this client.")
-            return
+    def _make_btn(self, parent, text: str, command, style: str = "secondary"):
+        """Return a styled button wrapper frame."""
+        cfg = {
+            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_DIM),
+            "secondary": (_BG_WHITE,  _TEXT,     _HOVER_ROW),
+            "ghost":     (_BG,        _ACCENT,   _BG),
+        }.get(style, (_BG_WHITE, _TEXT, _HOVER_ROW))
+        bg, fg, hover = cfg
 
-        if self._short_url:
-            self._show_result("Shortened URL", self._short_url)
-            return
+        wrap = tk.Frame(parent, bg=_SEP if style == "secondary" else bg)
+        btn = tk.Button(
+            wrap, text=text,
+            font=("Helvetica Neue", 13), fg=fg, bg=bg,
+            activebackground=hover, activeforeground=fg,
+            bd=0, padx=16, pady=7, cursor="hand2",
+            relief=tk.FLAT, command=command,
+        )
+        btn.pack(padx=1 if style == "secondary" else 0,
+                 pady=1 if style == "secondary" else 0)
+        btn.bind("<Enter>", lambda e: btn.configure(bg=hover))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
+        return wrap
 
-        self._show_result("Shortening URL...", "Please wait...")
-
-        def do_work():
-            try:
-                short = shorten_url(demo_url)
-                self._short_url = short
-                self.root.after(0, lambda: self._show_result("Shortened URL", short))
-            except ShortenError as e:
-                self.root.after(0, lambda: self._show_result("Error", str(e)))
-
-        threading.Thread(target=do_work, daemon=True).start()
-
-    def _do_find_hooks(self, client: dict):
-        website = client.get("website", "")
-        if not website:
-            self._show_result("Error", "No website URL available for this client.")
-            return
-
-        if self._pain_points:
-            self._show_result("Business Analysis / Hooks", self._pain_points)
-            return
-
-        self._show_result("Analyzing...", "Fetching website and analyzing business...")
-
-        def do_work():
-            try:
-                analysis = self.analyzer.analyze_business(website)
-                self._pain_points = analysis
-                self.root.after(
-                    0, lambda: self._show_result("Business Analysis / Hooks", analysis)
-                )
-            except AnalysisError as e:
-                self.root.after(0, lambda: self._show_result("Error", str(e)))
-
-        threading.Thread(target=do_work, daemon=True).start()
-
-    def _do_generate_message(self, client: dict):
-        self._show_result("Generating...", "Preparing outreach message...")
-
-        def do_work():
-            try:
-                # Step 1: Ensure short URL
-                if not self._short_url:
-                    demo_url = client.get("demoUrl", "")
-                    if demo_url:
-                        try:
-                            self._short_url = shorten_url(demo_url)
-                        except ShortenError:
-                            self._short_url = demo_url
-
-                # Step 2: Ensure pain points
-                if not self._pain_points:
-                    website = client.get("website", "")
-                    if website:
-                        self.root.after(
-                            0, lambda: self._set_status("Analyzing website first...")
-                        )
-                        self._pain_points = self.analyzer.analyze_business(website)
-
-                if not self._pain_points:
-                    self.root.after(
-                        0,
-                        lambda: self._show_result(
-                            "Error",
-                            "Cannot generate message without website analysis. "
-                            "Click 'Find Hooks' first.",
-                        ),
-                    )
-                    return
-
-                # Step 3: Generate message
-                self.root.after(
-                    0, lambda: self._set_status("Generating outreach message...")
-                )
-                message = self.analyzer.generate_first_message(
-                    client_name=client.get("name", ""),
-                    pain_points=self._pain_points,
-                    short_demo_url=self._short_url or client.get("demoUrl", ""),
-                    website_url=client.get("website", ""),
-                )
-                self._first_message = message
-                self.root.after(
-                    0, lambda: self._show_result("Generated First Message", message)
-                )
-            except (AnalysisError, Exception) as e:
-                self.root.after(
-                    0, lambda: self._show_result("Error", f"Message generation failed: {e}")
-                )
-
-        threading.Thread(target=do_work, daemon=True).start()
-
-    # ── UI helpers ───────────────────────────────────────────────
+    # ── Header ───────────────────────────────────────────────────
 
     def _build_header(self, title: str, show_back: bool = False):
-        header = tk.Frame(self.root, bg=_BG_HEADER, padx=12, pady=8)
-        header.pack(fill=tk.X)
+        hdr = tk.Frame(self.root, bg=_BG_WHITE, height=52)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
 
         if show_back:
-            back_btn = tk.Button(
-                header,
-                text="< Back",
-                font=("Helvetica", 11),
-                fg=_TEXT_DIM,
-                bg=_BG_HEADER,
-                bd=0,
-                activebackground=_ACCENT,
-                activeforeground=_TEXT_BRIGHT,
-                cursor="hand2",
-                command=self._go_back,
-            )
-            back_btn.pack(side=tk.LEFT, padx=(0, 12))
+            tk.Button(hdr, text="← Back",
+                      font=("Helvetica Neue", 13), fg=_ACCENT,
+                      bg=_BG_WHITE, bd=0,
+                      activebackground=_BG_WHITE, activeforeground=_ACCENT_DIM,
+                      cursor="hand2", command=self._go_back
+                      ).pack(side=tk.LEFT, padx=(16, 0))
 
-        tk.Label(
-            header, text=title, font=("Helvetica", 14, "bold"), fg=_ACCENT, bg=_BG_HEADER
-        ).pack(side=tk.LEFT)
+        tk.Label(hdr, text=title,
+                 font=("Helvetica Neue", 14, "bold"),
+                 fg=_TEXT, bg=_BG_WHITE
+                 ).pack(side=tk.LEFT, padx=(12 if show_back else 20, 0))
 
-        tk.Button(
-            header,
-            text="X",
-            font=("Helvetica", 12, "bold"),
-            fg=_TEXT_DIM,
-            bg=_BG_HEADER,
-            bd=0,
-            activebackground=_ACCENT,
-            activeforeground=_TEXT_BRIGHT,
-            command=self._close,
-        ).pack(side=tk.RIGHT)
+        tk.Button(hdr, text="✕",
+                  font=("Helvetica Neue", 14), fg=_TEXT_SEC,
+                  bg=_BG_WHITE, bd=0,
+                  activebackground=_BG_WHITE, activeforeground=_TEXT,
+                  cursor="hand2", command=self._close
+                  ).pack(side=tk.RIGHT, padx=16)
 
-    def _show_result(self, label: str, text: str):
+    # ── Result helpers ───────────────────────────────────────────
+
+    def _show_result(self, status: str, text: str):
         try:
             if hasattr(self, "_status_label") and self._status_label.winfo_exists():
-                self._status_label.config(text=label)
+                self._status_label.config(text=status)
             if hasattr(self, "_result_area") and self._result_area.winfo_exists():
                 self._result_area.config(state=tk.NORMAL)
                 self._result_area.delete("1.0", tk.END)
-                self._result_area.insert("1.0", text)
+                if text:
+                    self._result_area.insert("1.0", text)
             self.root.update()
         except tk.TclError:
             pass
@@ -575,21 +406,19 @@ class ClientLookupWindow:
             text = self._result_area.get("1.0", tk.END).strip()
             if text:
                 pyperclip.copy(text)
-                self._set_status("Copied to clipboard!")
+                self._set_status("Copied!")
                 self.root.after(1500, lambda: self._set_status(""))
+
+    # ── Navigation ───────────────────────────────────────────────
 
     def _go_back(self):
         self._selected_client = None
-        self._short_url = None
-        self._pain_points = None
-        self._first_message = None
+        self._short_url = self._pain_points = self._first_message = None
         self._show_client_list()
 
     def _select_client(self, client: dict):
         self._selected_client = client
-        self._short_url = None
-        self._pain_points = None
-        self._first_message = None
+        self._short_url = self._pain_points = self._first_message = None
         self._show_client_detail(client)
 
     def _close(self):
@@ -602,6 +431,88 @@ class ClientLookupWindow:
         if self.on_close:
             self.on_close()
 
+    # ── Action handlers ──────────────────────────────────────────
+
+    def _do_shorten_url(self, client: dict):
+        demo_url = client.get("demoUrl", "")
+        if not demo_url:
+            self._show_result("No demo URL", "This client has no demo URL to shorten.")
+            return
+        if self._short_url:
+            self._show_result("Shortened URL", self._short_url)
+            return
+        self._show_result("Shortening…", "")
+
+        def work():
+            try:
+                s = shorten_url(demo_url)
+                self._short_url = s
+                self.root.after(0, lambda: self._show_result("Shortened URL", s))
+            except ShortenError as e:
+                self.root.after(0, lambda: self._show_result("Error", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _do_find_hooks(self, client: dict):
+        website = client.get("website", "")
+        if not website:
+            self._show_result("No website", "This client has no website URL.")
+            return
+        if self._pain_points:
+            self._show_result("Business Analysis", self._pain_points)
+            return
+        self._show_result("Analyzing…", "Fetching website content…")
+
+        def work():
+            try:
+                a = self.analyzer.analyze_business(website)
+                self._pain_points = a
+                self.root.after(0, lambda: self._show_result("Business Analysis", a))
+            except AnalysisError as e:
+                self.root.after(0, lambda: self._show_result("Error", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _do_generate_message(self, client: dict):
+        self._show_result("Generating…", "")
+
+        def work():
+            try:
+                if not self._short_url:
+                    demo_url = client.get("demoUrl", "")
+                    if demo_url:
+                        try:
+                            self._short_url = shorten_url(demo_url)
+                        except ShortenError:
+                            self._short_url = demo_url
+
+                if not self._pain_points:
+                    site = client.get("website", "")
+                    if site:
+                        self.root.after(0, lambda: self._set_status("Analyzing website…"))
+                        self._pain_points = self.analyzer.analyze_business(site)
+
+                if not self._pain_points:
+                    self.root.after(0, lambda: self._show_result(
+                        "Missing data",
+                        "Could not analyze the website. Try 'Find Hooks' first.",
+                    ))
+                    return
+
+                self.root.after(0, lambda: self._set_status("Writing message…"))
+                msg = self.analyzer.generate_first_message(
+                    client_name=client.get("name", ""),
+                    pain_points=self._pain_points,
+                    short_demo_url=self._short_url or client.get("demoUrl", ""),
+                    website_url=client.get("website", ""),
+                )
+                self._first_message = msg
+                self.root.after(0, lambda: self._show_result("Outreach Message", msg))
+            except Exception as e:
+                self.root.after(0, lambda: self._show_result("Error", str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
     # ── Data loading ─────────────────────────────────────────────
 
     def _load_clients(self):
@@ -613,34 +524,21 @@ class ClientLookupWindow:
             self.root.after(0, lambda: self._show_error(str(e)))
 
     def _show_error(self, message: str):
-        self._clear_content()
+        self._clear()
         self._build_header("Client Lookup")
-        tk.Label(
-            self.root,
-            text=f"Error: {message}",
-            font=("Helvetica", 12),
-            fg=_ACCENT,
-            bg=_BG,
-            wraplength=500,
-            pady=30,
-        ).pack(expand=True)
-        tk.Button(
-            self.root,
-            text="Retry",
-            font=("Helvetica", 12, "bold"),
-            fg=_TEXT_BRIGHT,
-            bg=_ACCENT,
-            activebackground=_ACCENT_HOVER,
-            bd=0,
-            padx=20,
-            pady=8,
-            cursor="hand2",
-            command=lambda: self._retry_load(),
-        ).pack(pady=10)
+        _sep(self.root)
+        f = tk.Frame(self.root, bg=_BG)
+        f.pack(expand=True)
+        tk.Label(f, text="Could not load clients",
+                 font=("Helvetica Neue", 15, "bold"), fg=_TEXT, bg=_BG).pack(pady=(0, 8))
+        tk.Label(f, text=message,
+                 font=("Helvetica Neue", 12), fg=_TEXT_SEC, bg=_BG,
+                 wraplength=400).pack(pady=(0, 20))
+        self._make_btn(f, "Try Again", self._retry_load, "primary").pack()
         self.root.update()
 
     def _retry_load(self):
-        self._show_loading("Fetching clients...")
+        self._show_loading("Loading clients…")
         threading.Thread(target=self._load_clients, daemon=True).start()
 
     def run_loop(self):

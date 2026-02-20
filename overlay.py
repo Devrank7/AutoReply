@@ -1,25 +1,34 @@
 import tkinter as tk
-from tkinter import font as tkfont
 import logging
 import pyperclip
 
 logger = logging.getLogger(__name__)
+
+# ── Apple macOS light palette ────────────────────────────────────
+_BG       = "#F2F2F7"
+_BG_WHITE = "#FFFFFF"
+_SEP      = "#C6C6C8"
+_ACCENT   = "#007AFF"
+_ACCENT_D = "#0064D0"
+_TEXT     = "#1C1C1E"
+_TEXT_SEC = "#8E8E93"
+_TEXT_BTN = "#FFFFFF"
+_GREEN    = "#34C759"
+_RED      = "#FF3B30"
 
 
 class OverlayWindow:
     """Floating overlay window that shows AI-suggested replies."""
 
     def __init__(self, master=None, on_paste=None, on_regen=None, on_close=None):
-        self.master = master
-        self.on_paste = on_paste
-        self.on_regen = on_regen
-        self.on_close = on_close
-
-        self.root = None
+        self.master    = master
+        self.on_paste  = on_paste
+        self.on_regen  = on_regen
+        self.on_close  = on_close
+        self.root      = None
         self._current_suggestion = ""
 
     def _create_window(self):
-        """Create the tkinter overlay window as a Toplevel."""
         if self.root is not None:
             try:
                 self.root.destroy()
@@ -30,164 +39,119 @@ class OverlayWindow:
         self.root.title("AutoReply AI")
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(False)
-
-        # Window size and position (bottom-right corner)
-        width, height = 520, 400
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        x = screen_w - width - 30
-        y = screen_h - height - 80
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
-
-        # Styling
-        self.root.configure(bg="#1a1a2e")
+        self.root.configure(bg=_BG)
         self.root.resizable(True, True)
 
-        # Fonts
-        title_font = tkfont.Font(family="Helvetica", size=14, weight="bold")
-        text_font = tkfont.Font(family="Helvetica", size=13)
-        btn_font = tkfont.Font(family="Helvetica", size=12, weight="bold")
+        w, h = 540, 420
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{sw - w - 24}+{sh - h - 72}")
 
-        # Header
-        header = tk.Frame(self.root, bg="#16213e", padx=12, pady=8)
-        header.pack(fill=tk.X)
+        # ── Header ────────────────────────────────────────────────
+        hdr = tk.Frame(self.root, bg=_BG_WHITE, height=48)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
 
-        tk.Label(
-            header,
-            text="AutoReply AI",
-            font=title_font,
-            fg="#e94560",
-            bg="#16213e",
-        ).pack(side=tk.LEFT)
+        tk.Label(hdr, text="AutoReply AI",
+                 font=("Helvetica Neue", 13, "bold"),
+                 fg=_TEXT, bg=_BG_WHITE).pack(side=tk.LEFT, padx=16)
 
-        close_btn = tk.Button(
-            header,
-            text="X",
-            font=btn_font,
-            fg="#aaa",
-            bg="#16213e",
-            bd=0,
-            activebackground="#e94560",
-            activeforeground="#fff",
-            command=self._on_close_click,
-        )
-        close_btn.pack(side=tk.RIGHT)
+        tk.Button(hdr, text="✕",
+                  font=("Helvetica Neue", 13), fg=_TEXT_SEC, bg=_BG_WHITE,
+                  bd=0, activebackground=_BG_WHITE, activeforeground=_TEXT,
+                  cursor="hand2", command=self._on_close_click
+                  ).pack(side=tk.RIGHT, padx=14)
 
-        # Status label
+        # Separator
+        tk.Frame(self.root, bg=_SEP, height=1).pack(fill=tk.X)
+
+        # ── Status label ──────────────────────────────────────────
         self.status_label = tk.Label(
-            self.root,
-            text="Analyzing conversation...",
-            font=tkfont.Font(family="Helvetica", size=11),
-            fg="#aaa",
-            bg="#1a1a2e",
-            pady=4,
+            self.root, text="Analyzing…",
+            font=("Helvetica Neue", 11), fg=_TEXT_SEC, bg=_BG, anchor="w",
         )
-        self.status_label.pack(fill=tk.X)
+        self.status_label.pack(fill=tk.X, padx=16, pady=(10, 4))
 
-        # Text area (editable)
-        text_frame = tk.Frame(self.root, bg="#1a1a2e", padx=12, pady=4)
-        text_frame.pack(fill=tk.BOTH, expand=True)
-
+        # ── Text area (1px border via wrapper) ────────────────────
+        border = tk.Frame(self.root, bg=_SEP)
+        border.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
         self.text_area = tk.Text(
-            text_frame,
-            font=text_font,
-            fg="#eee",
-            bg="#0f3460",
-            insertbackground="#e94560",
-            selectbackground="#e94560",
-            selectforeground="#fff",
-            bd=0,
-            padx=10,
-            pady=10,
-            wrap=tk.WORD,
-            relief=tk.FLAT,
+            border,
+            font=("Helvetica Neue", 13), fg=_TEXT, bg=_BG_WHITE,
+            insertbackground=_ACCENT, selectbackground=_ACCENT,
+            selectforeground=_TEXT_BTN,
+            bd=0, padx=12, pady=10, wrap=tk.WORD, relief=tk.FLAT,
         )
-        self.text_area.pack(fill=tk.BOTH, expand=True)
+        self.text_area.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
-        # Buttons
-        btn_frame = tk.Frame(self.root, bg="#1a1a2e", padx=12, pady=10)
-        btn_frame.pack(fill=tk.X)
+        # ── Button row ────────────────────────────────────────────
+        btn_row = tk.Frame(self.root, bg=_BG)
+        btn_row.pack(fill=tk.X, padx=16, pady=(0, 16))
 
-        btn_style = {
-            "font": btn_font,
-            "bd": 0,
-            "padx": 16,
-            "pady": 8,
-            "cursor": "hand2",
-        }
+        self._add_btn(btn_row, "Copy",  self._on_copy_click,  "secondary").pack(side=tk.LEFT, padx=(0, 8))
+        self._add_btn(btn_row, "Paste", self._on_paste_click, "primary"  ).pack(side=tk.LEFT, padx=(0, 8))
+        self._add_btn(btn_row, "Regen", self._on_regen_click, "ghost"    ).pack(side=tk.LEFT)
 
-        tk.Button(
-            btn_frame,
-            text="Copy",
-            fg="#fff",
-            bg="#533483",
-            activebackground="#7952b3",
-            activeforeground="#fff",
-            command=self._on_copy_click,
-            **btn_style,
-        ).pack(side=tk.LEFT, padx=(0, 6))
+        self.root.bind("<Escape>", lambda _: self._on_close_click())
 
-        tk.Button(
-            btn_frame,
-            text="Paste",
-            fg="#fff",
-            bg="#e94560",
-            activebackground="#ff6b81",
-            activeforeground="#fff",
-            command=self._on_paste_click,
-            **btn_style,
-        ).pack(side=tk.LEFT, padx=(0, 6))
+    def _add_btn(self, parent, text: str, command, style: str = "secondary"):
+        cfg = {
+            "primary":   (_ACCENT,   _TEXT_BTN, _ACCENT_D),
+            "secondary": (_BG_WHITE, _TEXT,     _BG),
+            "ghost":     (_BG,       _TEXT_SEC, _BG_WHITE),
+        }.get(style, (_BG_WHITE, _TEXT, _BG))
+        bg, fg, hover = cfg
 
-        tk.Button(
-            btn_frame,
-            text="Regen",
-            fg="#fff",
-            bg="#0f3460",
-            activebackground="#1a5276",
-            activeforeground="#fff",
-            command=self._on_regen_click,
-            **btn_style,
-        ).pack(side=tk.LEFT)
+        wrap = tk.Frame(parent, bg=_SEP if style == "secondary" else bg)
+        btn = tk.Button(
+            wrap, text=text,
+            font=("Helvetica Neue", 12), fg=fg, bg=bg,
+            activebackground=hover, activeforeground=fg,
+            bd=0, padx=14, pady=6, cursor="hand2",
+            relief=tk.FLAT, command=command,
+        )
+        btn.pack(padx=1 if style == "secondary" else 0,
+                 pady=1 if style == "secondary" else 0)
+        btn.bind("<Enter>", lambda _: btn.configure(bg=hover))
+        btn.bind("<Leave>", lambda _: btn.configure(bg=bg))
+        return wrap
 
-        # Bind Escape to close
-        self.root.bind("<Escape>", lambda e: self._on_close_click())
+    # ── Public API ───────────────────────────────────────────────
 
     def show_loading(self):
-        """Show the overlay in loading state."""
         self._create_window()
-        self.status_label.config(text="Analyzing conversation...")
+        self.status_label.config(text="Analyzing conversation…")
+        self.text_area.config(state=tk.NORMAL)
         self.text_area.delete("1.0", tk.END)
-        self.text_area.insert("1.0", "Reading the chat screenshot and generating the best reply...")
+        self.text_area.insert("1.0", "Reading the chat and generating the best reply…")
         self.text_area.config(state=tk.DISABLED)
         self.root.update()
 
     def show_reply(self, suggestion: str):
-        """Display the AI-generated reply."""
         self._current_suggestion = suggestion
-        self.status_label.config(text="AI-generated reply (you can edit before sending):")
+        self.status_label.config(text="AI reply  ·  edit before sending")
         self.text_area.config(state=tk.NORMAL)
         self.text_area.delete("1.0", tk.END)
         self.text_area.insert("1.0", suggestion)
         self.root.update()
 
     def show_error(self, error_msg: str):
-        """Display an error message."""
-        self.status_label.config(text="Error:")
+        self.status_label.config(text="Error")
         self.text_area.config(state=tk.NORMAL)
         self.text_area.delete("1.0", tk.END)
-        self.text_area.insert("1.0", f"Error: {error_msg}")
+        self.text_area.insert("1.0", error_msg)
         self.root.update()
 
     def get_text(self) -> str:
-        """Get the current text from the text area (may be edited by user)."""
         return self.text_area.get("1.0", tk.END).strip()
 
+    # ── Button handlers ──────────────────────────────────────────
+
     def _on_copy_click(self):
-        text = self.get_text()
-        pyperclip.copy(text)
+        pyperclip.copy(self.get_text())
         self.status_label.config(text="Copied to clipboard!")
         self.root.after(1500, lambda: self.status_label.config(
-            text="AI-generated reply (you can edit before sending):"))
+            text="AI reply  ·  edit before sending"))
 
     def _on_paste_click(self):
         text = self.get_text()
@@ -198,10 +162,10 @@ class OverlayWindow:
 
     def _on_regen_click(self):
         self._current_suggestion = self.get_text()
-        self.status_label.config(text="Regenerating...")
+        self.status_label.config(text="Regenerating…")
         self.text_area.config(state=tk.DISABLED)
         self.text_area.delete("1.0", tk.END)
-        self.text_area.insert("1.0", "Generating a different reply...")
+        self.text_area.insert("1.0", "Generating a different reply…")
         self.root.update()
         if self.on_regen:
             self.on_regen(self._current_suggestion)
@@ -211,8 +175,9 @@ class OverlayWindow:
         if self.on_close:
             self.on_close()
 
+    # ── Lifecycle ────────────────────────────────────────────────
+
     def hide(self):
-        """Hide/destroy the overlay window."""
         if self.root:
             try:
                 self.root.destroy()
@@ -225,7 +190,6 @@ class OverlayWindow:
         pass
 
     def update(self):
-        """Process pending tkinter events without blocking."""
         if self.root:
             try:
                 self.root.update()
