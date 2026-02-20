@@ -45,3 +45,6 @@ SCREENSHOT_METHOD = os.getenv("SCREENSHOT_METHOD", "window")
 
 # Client Lookup
 CLIENT_API_BASE_URL = os.getenv("CLIENT_API_BASE_URL", "https://winbix-ai.pp.ua")
+
+# Google Service Account (for Sheets filter)
+SERVICE_ACCOUNT_PATH = BASE_DIR / os.getenv("SERVICE_ACCOUNT_PATH", "service_account.json")

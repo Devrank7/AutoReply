@@ -9,7 +9,9 @@ import tkinter as tk
 
 import pyperclip
 
+from config import SERVICE_ACCOUNT_PATH
 from services.client_api import ClientAPI, ClientAPIError
+from services.sheets_service import SheetsService, SheetsServiceError, normalize_url
 from services.url_shortener import shorten_url, ShortenError
 from services.client_analyzer import ClientAnalyzer, AnalysisError
 
@@ -42,8 +44,9 @@ class ClientLookupWindow:
         self.on_close = on_close
         self.root     = None
 
-        self.client_api = ClientAPI()
-        self.analyzer   = ClientAnalyzer()
+        self.client_api  = ClientAPI()
+        self.analyzer    = ClientAnalyzer()
+        self.sheets_svc  = SheetsService(SERVICE_ACCOUNT_PATH)
 
         self._clients          = []
         self._filtered_clients = []
@@ -51,6 +54,12 @@ class ClientLookupWindow:
         self._short_url        = None
         self._pain_points      = None
         self._first_message    = None
+
+        # Sheet filter state
+        self._sheet_list            = None    # None = not loaded yet
+        self._sheet_map: dict       = {}      # name → spreadsheet id
+        self._allowed_websites      = None    # None = no filter; set = active
+        self._selected_sheet_name   = ""
 
     # ── Window creation ──────────────────────────────────────────
 
@@ -138,6 +147,49 @@ class ClientLookupWindow:
                  font=("Helvetica Neue", 12), fg=_TEXT, bg=_BG,
                  insertbackground=_ACCENT, bd=0, relief=tk.FLAT
                  ).pack(side=tk.LEFT, ipady=6)
+
+        # ── Sheet filter row ──────────────────────────────────────
+        sheet_row = tk.Frame(bar, bg=_BG_WHITE)
+        sheet_row.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+        tk.Label(sheet_row, text="Sheet filter:", font=("Helvetica Neue", 12),
+                 fg=_TEXT_SEC, bg=_BG_WHITE).pack(side=tk.LEFT, padx=(0, 8))
+
+        if self._sheet_list is None:
+            # Sheets not loaded yet — show placeholder, kick off background load
+            sheet_opts = ["Loading sheets…"]
+            sheet_init = "Loading sheets…"
+            sheet_state = tk.DISABLED
+            threading.Thread(target=self._load_sheet_list, daemon=True).start()
+        elif not self._sheet_list:
+            sheet_opts = ["No sheets found"]
+            sheet_init = "No sheets found"
+            sheet_state = tk.DISABLED
+        else:
+            sheet_opts = ["No sheet filter"] + [s["name"] for s in self._sheet_list]
+            sheet_init = self._selected_sheet_name or "No sheet filter"
+            sheet_state = tk.NORMAL
+
+        self._sheet_var = tk.StringVar(value=sheet_init)
+        self._sheet_menu = tk.OptionMenu(
+            sheet_row, self._sheet_var, *sheet_opts,
+            command=self._on_sheet_selected,
+        )
+        self._sheet_menu.configure(
+            font=("Helvetica Neue", 12), fg=_TEXT, bg=_BG_WHITE,
+            activebackground=_HOVER_ROW, activeforeground=_TEXT,
+            bd=0, relief=tk.FLAT, cursor="hand2",
+            highlightthickness=0, width=36,
+            state=sheet_state,
+        )
+        self._sheet_menu.pack(side=tk.LEFT)
+
+        # Clear-filter button (only shown when a sheet filter is active)
+        if self._allowed_websites is not None:
+            self._make_btn(
+                sheet_row, "✕ Clear filter",
+                self._clear_sheet_filter, "ghost",
+            ).pack(side=tk.LEFT, padx=(8, 0))
 
         _sep(self.root)
 
@@ -248,8 +300,19 @@ class ClientLookupWindow:
         df = self._date_from_var.get().strip() or None
         dt = self._date_to_var.get().strip() or None
         self._filtered_clients = self.client_api.search_clients(q, df, dt)
+
+        # Apply sheet filter: keep only clients whose website is in the allowed set
+        if self._allowed_websites is not None:
+            self._filtered_clients = [
+                c for c in self._filtered_clients
+                if normalize_url(c.get("website", "")) in self._allowed_websites
+            ]
+            suffix = "  ·  sheet filter active"
+        else:
+            suffix = ""
+
         self._count_label.config(
-            text=f"{len(self._filtered_clients)} of {len(self._clients)} clients"
+            text=f"{len(self._filtered_clients)} of {len(self._clients)} clients{suffix}"
         )
         self._populate_list()
 
@@ -424,6 +487,101 @@ class ClientLookupWindow:
                 pyperclip.copy(text)
                 self._set_status("Copied!")
                 self.root.after(1500, lambda: self._set_status(""))
+
+    # ── Sheet filter ─────────────────────────────────────────────
+
+    def _load_sheet_list(self):
+        """Background: fetch list of 'Проверенные лиды' sheets from Drive."""
+        try:
+            sheets = self.sheets_svc.list_sheets()
+        except SheetsServiceError as exc:
+            logger.error("Could not load sheets: %s", exc)
+            sheets = []
+
+        self._sheet_list = sheets
+        self._sheet_map  = {s["name"]: s["id"] for s in sheets}
+
+        if self.root:
+            self.root.after(0, self._update_sheet_dropdown)
+
+    def _update_sheet_dropdown(self):
+        """Main thread: rebuild the OptionMenu after sheets have loaded."""
+        if not hasattr(self, "_sheet_menu"):
+            return
+        try:
+            if not self._sheet_menu.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        if not self._sheet_list:
+            self._sheet_var.set("No sheets found")
+            self._sheet_menu.configure(state=tk.DISABLED)
+            return
+
+        opts = ["No sheet filter"] + [s["name"] for s in self._sheet_list]
+        menu = self._sheet_menu["menu"]
+        menu.delete(0, "end")
+        for opt in opts:
+            menu.add_command(
+                label=opt,
+                command=lambda v=opt: (self._sheet_var.set(v),
+                                       self._on_sheet_selected(v)),
+            )
+        self._sheet_menu.configure(state=tk.NORMAL)
+        self._sheet_var.set(self._selected_sheet_name or "No sheet filter")
+
+    def _on_sheet_selected(self, value: str):
+        """Called when the user picks a sheet from the dropdown."""
+        self._selected_sheet_name = value
+
+        if value in ("No sheet filter", "No sheets found", "Loading sheets…"):
+            self._clear_sheet_filter()
+            return
+
+        sheet_id = self._sheet_map.get(value)
+        if not sheet_id:
+            return
+
+        # Disable UI while loading
+        try:
+            self._sheet_menu.configure(state=tk.DISABLED)
+        except tk.TclError:
+            pass
+        try:
+            self._count_label.config(text="Loading sheet…")
+        except tk.TclError:
+            pass
+
+        def work():
+            try:
+                allowed = self.sheets_svc.get_allowed_websites(sheet_id)
+            except SheetsServiceError as exc:
+                logger.error("Sheet load failed: %s", exc)
+                allowed = set()
+            self._allowed_websites = allowed
+            if self.root:
+                self.root.after(0, self._after_sheet_load)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_sheet_load(self):
+        """Main thread: re-enable UI and re-filter after sheet websites loaded."""
+        try:
+            self._sheet_menu.configure(state=tk.NORMAL)
+        except tk.TclError:
+            pass
+        self._apply_filters()
+        # Rebuild the list view so the ✕ Clear filter button appears
+        self._show_client_list()
+
+    def _clear_sheet_filter(self):
+        """Remove the active sheet filter and show all clients."""
+        self._allowed_websites    = None
+        self._selected_sheet_name = ""
+        self._apply_filters()
+        # Rebuild to remove the ✕ Clear filter button
+        self._show_client_list()
 
     # ── Navigation ───────────────────────────────────────────────
 
