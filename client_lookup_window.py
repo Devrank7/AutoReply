@@ -6,6 +6,8 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.parse
+import webbrowser
 
 import pyperclip
 
@@ -27,6 +29,7 @@ _TEXT       = "#1C1C1E"   # Primary label
 _TEXT_SEC   = "#8E8E93"   # Secondary label
 _TEXT_BTN   = "#FFFFFF"   # Button text on colored bg
 _HOVER_ROW  = "#F5F5F7"   # Row hover
+_RED        = "#FF3B30"   # Error / destructive
 
 
 def _sep(parent):
@@ -320,10 +323,24 @@ class ClientLookupWindow:
 
     def _show_client_detail(self, client: dict):
         self._clear()
+        self._btns = {}   # reset button refs from any previous detail view
+
         name = client.get("name", "Client")
+        self.root.title(f"Client Lookup — {name}")
         self._build_header(name[:46] + ("…" if len(name) > 46 else ""), show_back=True)
         _sep(self.root)
 
+        # ── Pinned bottom bar — always visible regardless of scroll ───
+        # Must be packed BEFORE the expanding canvas so pack gives it priority.
+        bottom_bar = tk.Frame(self.root, bg=_BG)
+        bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        tk.Frame(bottom_bar, bg=_SEP, height=1).pack(fill=tk.X)
+        copy_inner = tk.Frame(bottom_bar, bg=_BG)
+        copy_inner.pack(fill=tk.X, padx=20, pady=12)
+        self._make_btn(copy_inner, "Copy to Clipboard",
+                       self._copy_result, "secondary").pack(side=tk.LEFT)
+
+        # ── Scrollable content (fills remaining space) ─────────────
         outer = tk.Frame(self.root, bg=_BG)
         outer.pack(fill=tk.BOTH, expand=True)
 
@@ -338,17 +355,38 @@ class ClientLookupWindow:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
+        def _dscroll(delta):
+            try:
+                canvas.yview_scroll(delta, "units")
+            except tk.TclError:
+                pass
+
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: _dscroll(-1 * (e.delta // 120 or
+                                                 (-1 if e.delta < 0 else 1))))
+        canvas.bind_all("<Button-4>", lambda e: _dscroll(-3))
+        canvas.bind_all("<Button-5>", lambda e: _dscroll(3))
+
         # ── Info card ─────────────────────────────────────────────
         card = tk.Frame(content, bg=_BG_WHITE)
         card.pack(fill=tk.X, padx=20, pady=(20, 0))
 
-        fields = [
-            ("Website",  client.get("website", "") or "—"),
-            ("Email",    client.get("email", "")   or "—"),
-            ("Created",  (client.get("createdAt", "") or "")[:10] or "—"),
-            ("Demo URL", client.get("demoUrl", "") or "—"),
+        website  = client.get("website", "") or ""
+        email    = client.get("email",   "") or "—"
+        created  = (client.get("createdAt", "") or "")[:10] or "—"
+        demo_raw = client.get("demoUrl", "") or ""
+        # Decode percent-encoding (e.g. %3A → :) and truncate for readability
+        demo_display = urllib.parse.unquote(demo_raw)
+        if len(demo_display) > 72:
+            demo_display = demo_display[:69] + "…"
+
+        rows_data = [
+            ("Website",  website or "—",                     bool(website)),
+            ("Email",    email,                               False),
+            ("Created",  created,                             False),
+            ("Demo URL", demo_display if demo_raw else "—",  False),
         ]
-        for i, (lbl, val) in enumerate(fields):
+        for i, (lbl, val, clickable) in enumerate(rows_data):
             if i:
                 tk.Frame(card, bg=_SEP, height=1).pack(fill=tk.X, padx=16)
             row = tk.Frame(card, bg=_BG_WHITE)
@@ -356,64 +394,76 @@ class ClientLookupWindow:
             tk.Label(row, text=lbl, width=9, anchor="w",
                      font=("Helvetica Neue", 12), fg=_TEXT_SEC,
                      bg=_BG_WHITE).pack(side=tk.LEFT, pady=11)
-            tk.Label(row, text=val, anchor="w", wraplength=480,
-                     font=("Helvetica Neue", 12), fg=_TEXT,
-                     bg=_BG_WHITE).pack(side=tk.LEFT, fill=tk.X, expand=True,
-                                        pady=11, padx=(10, 0))
+            if clickable:
+                url_to_open = val if val.startswith("http") else f"https://{val}"
+                lk = tk.Label(row, text=val, anchor="w",
+                              font=("Helvetica Neue", 12), fg=_ACCENT,
+                              bg=_BG_WHITE, cursor="hand2")
+                lk.bind("<Button-1>",
+                        lambda e, u=url_to_open: webbrowser.open(u))
+                lk.bind("<Enter>",
+                        lambda e, lb=lk: lb.config(
+                            font=("Helvetica Neue", 12, "underline")))
+                lk.bind("<Leave>",
+                        lambda e, lb=lk: lb.config(
+                            font=("Helvetica Neue", 12)))
+                lk.pack(side=tk.LEFT, fill=tk.X, expand=True,
+                        pady=11, padx=(10, 0))
+            else:
+                tk.Label(row, text=val, anchor="w", wraplength=480,
+                         font=("Helvetica Neue", 12), fg=_TEXT,
+                         bg=_BG_WHITE).pack(side=tk.LEFT, fill=tk.X,
+                                            expand=True, pady=11, padx=(10, 0))
 
         # ── Action buttons ────────────────────────────────────────
         btn_row = tk.Frame(content, bg=_BG)
         btn_row.pack(fill=tk.X, padx=20, pady=20)
 
         self._make_btn(btn_row, "Shorten URL",
-                       lambda: self._do_shorten_url(client), "secondary"
-                       ).pack(side=tk.LEFT, padx=(0, 8))
+                       lambda: self._do_shorten_url(client), "secondary",
+                       tag="shorten").pack(side=tk.LEFT, padx=(0, 8))
         self._make_btn(btn_row, "Find Hooks",
-                       lambda: self._do_find_hooks(client), "secondary"
-                       ).pack(side=tk.LEFT, padx=(0, 8))
+                       lambda: self._do_find_hooks(client), "secondary",
+                       tag="hooks").pack(side=tk.LEFT, padx=(0, 8))
         self._make_btn(btn_row, "Generate Message",
-                       lambda: self._do_generate_message(client), "primary"
-                       ).pack(side=tk.LEFT)
+                       lambda: self._do_generate_message(client), "primary",
+                       tag="generate").pack(side=tk.LEFT)
 
-        # Status
+        # ── Status label ──────────────────────────────────────────
         self._status_label = tk.Label(content, text="",
                                       font=("Helvetica Neue", 11),
                                       fg=_TEXT_SEC, bg=_BG, anchor="w")
-        self._status_label.pack(fill=tk.X, padx=20, pady=(0, 6))
+        self._status_label.pack(fill=tk.X, padx=20, pady=(0, 4))
 
-        # Result text area (with 1px border via wrapper)
-        border = tk.Frame(content, bg=_SEP)
-        border.pack(fill=tk.BOTH, expand=True, padx=20)
+        # ── Result text area (1px border, fills remaining space) ──
+        self._result_border = tk.Frame(content, bg=_SEP)
+        self._result_border.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 16))
         self._result_area = tk.Text(
-            border,
+            self._result_border,
             font=("Helvetica Neue", 13), fg=_TEXT, bg=_BG_WHITE,
             insertbackground=_ACCENT, selectbackground=_ACCENT,
             selectforeground=_TEXT_BTN, bd=0, padx=14, pady=12,
-            wrap=tk.WORD, relief=tk.FLAT, height=9,
+            wrap=tk.WORD, relief=tk.FLAT, height=7,
         )
         self._result_area.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
-
-        # Copy button
-        copy_row = tk.Frame(content, bg=_BG)
-        copy_row.pack(fill=tk.X, padx=20, pady=14)
-        self._make_btn(copy_row, "Copy to Clipboard", self._copy_result, "secondary"
-                       ).pack(side=tk.LEFT)
 
         self.root.update()
 
     # ── Button factory ───────────────────────────────────────────
 
-    def _make_btn(self, parent, text: str, command, style: str = "secondary"):
-        """Return a styled button wrapper frame."""
-        # primary  = filled Apple-blue pill, bold text
-        # secondary = light-gray surface (visible even against white/gray bg)
-        # ghost    = same surface + blue text, for low-emphasis actions
+    def _make_btn(self, parent, text: str, command, style: str = "secondary",
+                  tag: str = None):
+        """Return a styled button wrapper frame.
+
+        Pass tag= to store a reference in self._btns[tag] so the button
+        text/state can be updated from action handlers (e.g. loading states).
+        """
         cfg = {
-            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_DIM, False),
-            "secondary": ("#E9E9EE",  _TEXT,     "#D8D8DE",   False),
-            "ghost":     ("#E9E9EE",  _ACCENT,   "#D8D8DE",   False),
-        }.get(style, ("#E9E9EE", _TEXT, "#D8D8DE", False))
-        bg, fg, hover, _ = cfg
+            "primary":   (_ACCENT,    _TEXT_BTN, _ACCENT_DIM),
+            "secondary": ("#E9E9EE",  _TEXT,     "#D8D8DE"),
+            "ghost":     ("#E9E9EE",  _ACCENT,   "#D8D8DE"),
+        }.get(style, ("#E9E9EE", _TEXT, "#D8D8DE"))
+        bg, fg, hover = cfg
 
         font = ("Helvetica Neue", 13, "bold") if style == "primary" else ("Helvetica Neue", 13)
 
@@ -428,6 +478,12 @@ class ClientLookupWindow:
         btn.pack()
         btn.bind("<Enter>", lambda e: btn.configure(bg=hover))
         btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
+
+        if tag is not None:
+            if not hasattr(self, "_btns"):
+                self._btns = {}
+            self._btns[tag] = btn
+
         return wrap
 
     # ── Header ───────────────────────────────────────────────────
@@ -440,7 +496,7 @@ class ClientLookupWindow:
         if show_back:
             tk.Button(hdr, text="← Back",
                       font=("Helvetica Neue", 13), fg=_ACCENT,
-                      bg=_BG_WHITE, bd=0,
+                      bg=_BG_WHITE, bd=0, relief=tk.FLAT,
                       activebackground=_BG_WHITE, activeforeground=_ACCENT_DIM,
                       cursor="hand2", command=self._go_back
                       ).pack(side=tk.LEFT, padx=(16, 0))
@@ -459,12 +515,18 @@ class ClientLookupWindow:
 
     # ── Result helpers ───────────────────────────────────────────
 
-    def _show_result(self, status: str, text: str):
+    def _show_result(self, status: str, text: str, error: bool = False):
         try:
+            color = _RED if error else _TEXT_SEC
             if hasattr(self, "_status_label") and self._status_label.winfo_exists():
-                self._status_label.config(text=status)
+                self._status_label.config(text=status, fg=color)
+            if hasattr(self, "_result_border") and self._result_border.winfo_exists():
+                self._result_border.config(bg=_RED if error else _SEP)
             if hasattr(self, "_result_area") and self._result_area.winfo_exists():
-                self._result_area.config(state=tk.NORMAL)
+                self._result_area.config(
+                    state=tk.NORMAL,
+                    fg=_RED if error else _TEXT,
+                )
                 self._result_area.delete("1.0", tk.END)
                 if text:
                     self._result_area.insert("1.0", text)
@@ -472,10 +534,11 @@ class ClientLookupWindow:
         except tk.TclError:
             pass
 
-    def _set_status(self, text: str):
+    def _set_status(self, text: str, error: bool = False):
         try:
             if hasattr(self, "_status_label") and self._status_label.winfo_exists():
-                self._status_label.config(text=text)
+                self._status_label.config(text=text,
+                                          fg=_RED if error else _TEXT_SEC)
             self.root.update()
         except tk.TclError:
             pass
@@ -485,8 +548,26 @@ class ClientLookupWindow:
             text = self._result_area.get("1.0", tk.END).strip()
             if text:
                 pyperclip.copy(text)
-                self._set_status("Copied!")
-                self.root.after(1500, lambda: self._set_status(""))
+                self._set_status("✓  Copied to clipboard")
+                self.root.after(2000, lambda: self._set_status(""))
+
+    def _set_btn_loading(self, tag: str, label: str):
+        """Disable a tagged button and show a loading label."""
+        btn = getattr(self, "_btns", {}).get(tag)
+        if btn:
+            try:
+                btn.config(text=label, state=tk.DISABLED, cursor="")
+            except tk.TclError:
+                pass
+
+    def _set_btn_ready(self, tag: str, label: str):
+        """Re-enable a tagged button with its original label."""
+        btn = getattr(self, "_btns", {}).get(tag)
+        if btn:
+            try:
+                btn.config(text=label, state=tk.NORMAL, cursor="hand2")
+            except tk.TclError:
+                pass
 
     # ── Sheet filter ─────────────────────────────────────────────
 
@@ -586,6 +667,7 @@ class ClientLookupWindow:
     # ── Navigation ───────────────────────────────────────────────
 
     def _go_back(self):
+        self.root.title("Client Lookup")
         self._selected_client = None
         self._short_url = self._pain_points = self._first_message = None
         self._show_client_list()
@@ -637,70 +719,100 @@ class ClientLookupWindow:
     def _do_shorten_url(self, client: dict):
         demo_url = client.get("demoUrl", "")
         if not demo_url:
-            self._show_result("No demo URL", "This client has no demo URL to shorten.")
+            self._show_result("No demo URL",
+                              "This client has no demo URL to shorten.", error=True)
             return
         if self._short_url:
             self._show_result("Shortened URL", self._short_url)
             return
-        self._show_result("Shortening…", "")
+        self._set_btn_loading("shorten", "Shortening…")
+        self._show_result("Shortening URL…", "")
 
         def work():
             try:
                 s = shorten_url(demo_url)
                 self._short_url = s
-                self.root.after(0, lambda: self._show_result("Shortened URL", s))
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("shorten", "Shorten URL"),
+                    self._show_result("Shortened URL", s),
+                ))
             except ShortenError as e:
-                self.root.after(0, lambda: self._show_result("Error", str(e)))
+                err = str(e)
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("shorten", "Shorten URL"),
+                    self._show_result("Error", err, error=True),
+                ))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _do_find_hooks(self, client: dict):
         website = client.get("website", "")
         if not website:
-            self._show_result("No website", "This client has no website URL.")
+            self._show_result("No website",
+                              "This client has no website URL.", error=True)
             return
         if self._pain_points:
             self._show_result("Business Analysis", self._pain_points)
             return
-        self._show_result("Analyzing…", "Fetching website content…")
+        self._set_btn_loading("hooks", "Analyzing…")
+        self._show_result("Analyzing website…", "Fetching content…")
 
         def work():
             try:
                 a = self.analyzer.analyze_business(website)
                 self._pain_points = a
-                self.root.after(0, lambda: self._show_result("Business Analysis", a))
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("hooks", "Find Hooks"),
+                    self._show_result("Business Analysis", a),
+                ))
             except AnalysisError as e:
-                self.root.after(0, lambda: self._show_result("Error", str(e)))
+                err = str(e)
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("hooks", "Find Hooks"),
+                    self._show_result("Error", err, error=True),
+                ))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _do_generate_message(self, client: dict):
+        self._set_btn_loading("generate", "Generating…")
         self._show_result("Generating…", "")
 
         def work():
             try:
+                # Step 1: shorten URL if not already done
                 if not self._short_url:
                     demo_url = client.get("demoUrl", "")
                     if demo_url:
+                        self.root.after(0, lambda: self._set_status(
+                            "Step 1/3 — Shortening demo URL…"))
                         try:
                             self._short_url = shorten_url(demo_url)
                         except ShortenError:
                             self._short_url = demo_url
 
+                # Step 2: analyze website if not already done
                 if not self._pain_points:
                     site = client.get("website", "")
                     if site:
-                        self.root.after(0, lambda: self._set_status("Analyzing website…"))
+                        self.root.after(0, lambda: self._set_status(
+                            "Step 2/3 — Analyzing website…"))
                         self._pain_points = self.analyzer.analyze_business(site)
 
                 if not self._pain_points:
-                    self.root.after(0, lambda: self._show_result(
-                        "Missing data",
-                        "Could not analyze the website. Try 'Find Hooks' first.",
+                    self.root.after(0, lambda: (
+                        self._set_btn_ready("generate", "Generate Message"),
+                        self._show_result(
+                            "Missing data",
+                            "Could not analyze the website. Try 'Find Hooks' first.",
+                            error=True,
+                        ),
                     ))
                     return
 
-                self.root.after(0, lambda: self._set_status("Writing message…"))
+                # Step 3: generate outreach message
+                self.root.after(0, lambda: self._set_status(
+                    "Step 3/3 — Writing outreach message…"))
                 msg = self.analyzer.generate_first_message(
                     client_name=client.get("name", ""),
                     pain_points=self._pain_points,
@@ -708,9 +820,16 @@ class ClientLookupWindow:
                     website_url=client.get("website", ""),
                 )
                 self._first_message = msg
-                self.root.after(0, lambda: self._show_result("Outreach Message", msg))
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("generate", "Generate Message"),
+                    self._show_result("Outreach Message", msg),
+                ))
             except Exception as e:
-                self.root.after(0, lambda: self._show_result("Error", str(e)))
+                err = str(e)
+                self.root.after(0, lambda: (
+                    self._set_btn_ready("generate", "Generate Message"),
+                    self._show_result("Error", err, error=True),
+                ))
 
         threading.Thread(target=work, daemon=True).start()
 
