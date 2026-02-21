@@ -250,7 +250,7 @@ class ClientLookupWindow:
             body = tk.Frame(card, bg=_BG_WHITE)
             body.pack(fill=tk.X, padx=16, pady=12)
 
-            # Name + chevron
+            # Name + optional mark button + chevron
             top_row = tk.Frame(body, bg=_BG_WHITE)
             top_row.pack(fill=tk.X)
             tk.Label(top_row, text=client.get("name", "Unknown"),
@@ -258,6 +258,22 @@ class ClientLookupWindow:
                      fg=_TEXT, bg=_BG_WHITE, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True)
             tk.Label(top_row, text="›", font=("Helvetica Neue", 18),
                      fg=_TEXT_SEC, bg=_BG_WHITE).pack(side=tk.RIGHT)
+
+            # "✓ Mark" button — only visible when a sheet filter is active
+            if self._allowed_websites is not None:
+                mark_btn = tk.Button(
+                    top_row, text="✓ Mark",
+                    font=("Helvetica Neue", 11), fg=_ACCENT, bg=_BG_WHITE,
+                    activebackground=_HOVER_ROW, activeforeground=_ACCENT_DIM,
+                    bd=0, relief=tk.FLAT, cursor="hand2", padx=8, pady=2,
+                )
+                mark_btn.pack(side=tk.RIGHT, padx=(4, 4))
+
+                def _on_mark(_event, c=client, b=mark_btn):
+                    self._mark_written(c, b)
+                    return "break"  # stop click from bubbling → opening detail view
+
+                mark_btn.bind("<Button-1>", _on_mark)
 
             # Sub-line
             parts = []
@@ -656,6 +672,42 @@ class ClientLookupWindow:
         # Rebuild the list view so the ✕ Clear filter button appears
         self._show_client_list()
 
+    def _mark_written(self, client: dict, btn: tk.Button):
+        """Background: write 'yes' to the Written column for this client's row."""
+        website = client.get("website", "")
+        if not website:
+            return
+        sheet_id = self._sheet_map.get(self._selected_sheet_name)
+        if not sheet_id:
+            return
+        try:
+            btn.config(text="…", state=tk.DISABLED, cursor="")
+        except tk.TclError:
+            return
+
+        def work():
+            try:
+                self.sheets_svc.mark_as_written(sheet_id, website)
+                if self._allowed_websites is not None:
+                    self._allowed_websites.discard(normalize_url(website))
+                self.root.after(0, lambda: self._after_mark_written(btn, success=True))
+            except SheetsServiceError as exc:
+                logger.error("mark_as_written failed: %s", exc)
+                self.root.after(0, lambda: self._after_mark_written(btn, success=False))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_mark_written(self, btn: tk.Button, success: bool):
+        try:
+            if success:
+                btn.config(text="✓ Written", fg="#34C759", state=tk.DISABLED, cursor="")
+                # Remove from list after a short delay so user sees the confirmation
+                self.root.after(1200, self._apply_filters)
+            else:
+                btn.config(text="✕ Error", fg=_RED, state=tk.NORMAL, cursor="hand2")
+        except tk.TclError:
+            pass
+
     def _clear_sheet_filter(self):
         """Remove the active sheet filter and show all clients."""
         self._allowed_websites    = None
@@ -684,9 +736,6 @@ class ClientLookupWindow:
         self.root.lift()
         self.root.focus_force()
         if sys.platform == "darwin":
-            # On macOS a background Python process won't auto-activate even with
-            # -topmost True.  AppleScript activates the process by PID so the
-            # window pops in front of whatever app had focus (e.g. Chrome).
             subprocess.run(
                 [
                     "osascript", "-e",

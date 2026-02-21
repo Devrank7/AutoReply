@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",  # full access needed for mark-as-written
 ]
 _SHEET_SUFFIX = "Проверенные лиды"
 
@@ -27,6 +27,16 @@ def normalize_url(url: str) -> str:
             url = url[len(prefix):]
             break
     return url.rstrip("/")
+
+
+def _col_letter(idx: int) -> str:
+    """0-based column index → A1 column letter (0→A, 25→Z, 26→AA, …)."""
+    result = ""
+    n = idx + 1
+    while n:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
 
 
 class SheetsService:
@@ -126,3 +136,78 @@ class SheetsService:
 
         logger.info("Sheet %s → %d unwritten websites", spreadsheet_id, len(allowed))
         return allowed
+
+    def mark_as_written(self, spreadsheet_id: str, website: str) -> None:
+        """Set Written=yes for the row matching the given website URL.
+
+        If the 'Written' column does not exist it is created automatically.
+        Raises SheetsServiceError if the website row cannot be found.
+        """
+        try:
+            svc = build("sheets", "v4", credentials=self._get_creds(),
+                        cache_discovery=False)
+        except Exception as exc:
+            raise SheetsServiceError(f"Auth failed: {exc}") from exc
+
+        # Read all data to locate the target row
+        try:
+            result = svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range="A:ZZ",
+            ).execute()
+        except Exception as exc:
+            raise SheetsServiceError(f"Sheets API error: {exc}") from exc
+
+        values = result.get("values", [])
+        if not values:
+            raise SheetsServiceError("Sheet is empty")
+
+        headers = [h.strip().lower() for h in values[0]]
+        website_col = next((i for i, h in enumerate(headers) if "website" in h), None)
+        written_col = next((i for i, h in enumerate(headers) if "written" in h), None)
+
+        if website_col is None:
+            raise SheetsServiceError("Sheet has no 'Website' column")
+
+        norm = normalize_url(website)
+        target_row_idx = None  # position in values[] (0 = header)
+        for i, row in enumerate(values[1:], start=1):
+            if len(row) > website_col and normalize_url(row[website_col].strip()) == norm:
+                target_row_idx = i
+                break
+
+        if target_row_idx is None:
+            raise SheetsServiceError(f"No sheet row found for website '{website}'")
+
+        # Create 'Written' column header if it doesn't exist yet
+        if written_col is None:
+            written_col = len(headers)
+            col = _col_letter(written_col)
+            try:
+                svc.spreadsheets().values().update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"{col}1",
+                    valueInputOption="RAW",
+                    body={"values": [["Written"]]},
+                ).execute()
+                logger.info("Created 'Written' column %s in sheet %s", col, spreadsheet_id)
+            except Exception as exc:
+                raise SheetsServiceError(
+                    f"Could not create 'Written' column: {exc}") from exc
+
+        # Write "yes" to the matching row
+        col = _col_letter(written_col)
+        sheet_row = target_row_idx + 1  # 1-indexed (row 1 = header)
+        try:
+            svc.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{col}{sheet_row}",
+                valueInputOption="RAW",
+                body={"values": [["yes"]]},
+            ).execute()
+        except Exception as exc:
+            raise SheetsServiceError(
+                f"Could not write to {col}{sheet_row}: {exc}") from exc
+
+        logger.info("Marked '%s' as written (sheet %s, row %d, col %s)",
+                    website, spreadsheet_id, sheet_row, col)

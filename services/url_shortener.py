@@ -1,4 +1,4 @@
-"""URL shortener using the free v.gd / is.gd API (no auth needed)."""
+"""URL shortener using the free spoo.me API (no auth needed, ~23 chars)."""
 
 import logging
 import urllib.parse
@@ -13,17 +13,35 @@ class ShortenError(Exception):
 
 
 def shorten_url(long_url: str) -> str:
-    """Shorten a URL using v.gd API (shortest domain, ~14 chars).
+    """Shorten a URL using spoo.me API (~23 chars).
 
-    Falls back to is.gd if v.gd fails.
+    Falls back to TinyURL if spoo.me fails.
     Raises ShortenError if all services fail.
     """
     # The demo URL may contain already-encoded chars (e.g. %3A in website= param).
     # Decode once so requests can re-encode cleanly without double-encoding.
     clean_url = urllib.parse.unquote(long_url)
 
-    # TinyURL: free, no auth, tolerates complex nested URLs.
-    # v.gd/is.gd blacklist winbix-ai.pp.ua ("looks like redirect service").
+    # spoo.me: free, no auth, short links (~23 chars), accepts winbix-ai.pp.ua.
+    try:
+        resp = requests.post(
+            "https://spoo.me/",
+            data={"url": clean_url},
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        short = resp.json().get("short_url", "")
+        if short.startswith("http"):
+            logger.info("Shortened: %s -> %s", long_url[:60], short)
+            return short
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("spoo.me failed: %s", e)
+
+    # Fallback: TinyURL (longer links ~29 chars, but very reliable).
     try:
         resp = requests.get(
             "https://tinyurl.com/api-create.php",
@@ -33,24 +51,9 @@ def shorten_url(long_url: str) -> str:
         resp.raise_for_status()
         short = resp.text.strip()
         if short.startswith("http"):
-            logger.info("Shortened: %s -> %s", long_url[:60], short)
+            logger.info("Shortened via TinyURL: %s -> %s", long_url[:60], short)
             return short
     except requests.RequestException as e:
         logger.warning("TinyURL failed: %s", e)
-
-    # Fallback: is.gd (may reject some domains but worth trying)
-    try:
-        resp = requests.get(
-            "https://is.gd/create.php",
-            params={"format": "simple", "url": clean_url},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        short = resp.text.strip()
-        if short.startswith("http"):
-            logger.info("Shortened via is.gd: %s -> %s", long_url[:60], short)
-            return short
-    except requests.RequestException as e:
-        logger.warning("is.gd failed: %s", e)
 
     raise ShortenError("All URL shortener services failed. Copy the full URL manually.")
