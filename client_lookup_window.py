@@ -730,7 +730,7 @@ class ClientLookupWindow:
         self._show_client_detail(client)
 
     def _bring_to_front(self):
-        """Lift the window above all others and activate the app (macOS fix)."""
+        """Lift the window above all others and activate the app."""
         if not self.root:
             return
         self.root.lift()
@@ -744,6 +744,14 @@ class ClientLookupWindow:
                 ],
                 check=False,
             )
+        elif sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                wnd_id = self.root.winfo_id()
+                ctypes.windll.user32.SetForegroundWindow(wnd_id)
+            except Exception:
+                pass
 
     def _close(self):
         # Unbind global scroll handlers before destroying the canvas

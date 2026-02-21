@@ -70,7 +70,8 @@ def _create_tray_icon_image() -> Image.Image:
     draw.ellipse([4, 4, 60, 60], fill="#e94560")
     try:
         from PIL import ImageFont
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 22)
+        _font_name = "/System/Library/Fonts/Helvetica.ttc" if IS_MACOS else "arial.ttf"
+        font = ImageFont.truetype(_font_name, 22)
     except Exception:
         font = ImageDraw.Draw(img).getfont()
     draw.text((14, 16), "AR", fill="white", font=font)
